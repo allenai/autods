@@ -11,3 +11,4 @@ dependencies:
     - scikit-learn
     - scipy
     - statsmodels
+    - h5py

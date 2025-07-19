@@ -1,49 +1,8 @@
-from typing import List, Dict, Optional
-from pydantic import BaseModel, Field, ValidationError
-from openai import OpenAI
-import json
+from typing import List, Dict
+from pydantic import BaseModel, Field
 import tiktoken
 
-# Initialize OpenAI client
-client = OpenAI(max_retries=10)
-
-
-def _query_llm(
-        messages: List[Dict[str, str]],
-        n_samples: int,
-        model: str = "gpt-4o",
-        temperature: float | None = None,
-        reasoning_effort: str | None = None,
-        response_format=None
-):
-    n_samples_batch_size = 8 if model.startswith("o") else n_samples
-    responses = []
-    # Sample exactly n_samples responses
-    for i in range(0, n_samples, n_samples_batch_size):
-        kwargs = {
-            "model": model,
-            "messages": messages,
-            "n": min(n_samples_batch_size, n_samples - len(responses))
-        }
-        if not model.startswith("o") and temperature is not None:
-            kwargs["temperature"] = temperature
-        if model.startswith("o") and reasoning_effort is not None:
-            kwargs["reasoning_effort"] = reasoning_effort
-
-        if response_format is not None:
-            kwargs["response_format"] = response_format
-
-        try:
-            response = client.chat.completions.parse(**kwargs)
-        except ValidationError:
-            # Retry if the response format validation fails
-            response = client.chat.completions.parse(**kwargs)
-
-        for choice in response.choices:
-            if choice.message.content is None:
-                continue
-            responses += [json.loads(choice.message.content)]
-    return responses
+from utils import query_llm
 
 
 class BeliefTrueFalse:
@@ -548,9 +507,9 @@ def get_belief(
         all_msgs += evidence
     all_msgs.append(hypothesis_msg)
 
-    response = _query_llm(all_msgs, model=model, n_samples=n_samples,
-                          temperature=temperature, reasoning_effort=reasoning_effort,
-                          response_format=belief_cls.ResponseFormat)
+    response = query_llm(all_msgs, model=model, n_samples=n_samples,
+                         temperature=temperature, reasoning_effort=reasoning_effort,
+                         response_format=belief_cls.ResponseFormat)
     distribution = belief_cls.parse_response(response)
 
     # If we are using an explicit prior, we need to combine it with the posterior distribution

@@ -1,48 +1,25 @@
-import os
 import json
 import csv
 import argparse
-
-from networkx.algorithms.shortest_paths.weighted import bellman_ford_path_length
-
-from src.beliefs import BELIEF_MODE_TO_CLS
+from beliefs import BELIEF_MODE_TO_CLS
+from utils import get_nodes
 
 
 class ArgParser(argparse.ArgumentParser):
     def __init__(self, group=None):
         super().__init__(description='Get surprising nodes from MCTS logs')
-
         self.add_argument('--in_fpath', type=str, required=True,
                           help='mcts_nodes.json file path or directory containing mcts_node_*.json files')
         self.add_argument('--out_fpath', type=str, required=True, help='output CSV file path')
 
 
-if __name__ == '__main__':
-    parser = ArgParser()
-    args = parser.parse_args()
+def nodes_to_csv(nodes_or_json_path, out_fpath):
+    mcts_nodes = get_nodes(nodes_or_json_path)
 
-    # Load the MCTS nodes from the input file
-    if os.path.isdir(args.in_fpath):
-        # If a directory is provided, load all mcts_node_*.json files
-        mcts_nodes = []
-        for filename in os.listdir(args.in_fpath):
-            if filename.startswith('mcts_node_') and filename.endswith('.json'):
-                with open(os.path.join(args.in_fpath, filename), 'r') as f:
-                    obj = json.load(f)
-                    mcts_nodes.append(obj)
-    else:
-        with open(args.in_fpath, 'r') as f:
-            mcts_nodes = json.load(f)
-
-    # Convert to CSV
-    # Columns: Hypo, is_surprise?, degree of surprisal, direction of surprisal (true to false, or false to true), prior_belief, posterior_belief, experiment_plan, analysis
     csv_list = []
     for node in mcts_nodes:
-        try:
-            if node["level"] in [0, 1]:
-                continue
-        except:
-            breakpoint()
+        if node["level"] in [0, 1]:
+            continue
         latest_experiment = None
         latest_programmer = None
         latest_code_executor = None
@@ -89,32 +66,33 @@ if __name__ == '__main__':
         csv_node['posterior_belief'] = posterior_mean
 
         try:
-            # Check if plan is a valid json, if so, extract the 'title', 'objective', 'steps', and 'deliverables' and put in a single string with headers
             experiment_plan = json.loads(latest_experiment['content'])
             csv_node['experiment_plan'] = f"Title: {experiment_plan.get('title', '')}\n" \
                                           f"Objective: {experiment_plan.get('objective', '')}\n" \
                                           f"Steps: {experiment_plan.get('steps', '')}\n" \
                                           f"Deliverables: {experiment_plan.get('deliverables', '')}"
-        except json.JSONDecodeError:
-            # If not a valid json, keep the content as is
+        except Exception:
             csv_node['experiment_plan'] = latest_experiment['content']
 
         csv_node['analysis'] = json.loads(latest_analyst['content'])['analysis']
 
         csv_list.append(csv_node)
-    # Sort csv_list by degree of surprisal in descending order (handle Nones)
     csv_list.sort(key=lambda x: x['degree_of_surprisal'] if x['degree_of_surprisal'] is not None else float('-inf'),
                   reverse=True)
 
-    # Write csv_list to a CSV file
-    with open(args.out_fpath, 'w', newline='') as csvfile:
+    with open(out_fpath, 'w', newline='') as csv_file:
         fieldnames = ['id', 'hypothesis', 'is_surprise', 'degree_of_surprisal', 'direction_of_surprisal',
                       'prior_belief', 'posterior_belief', 'experiment_plan', 'analysis']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for row in csv_list:
-            # Convert None to empty string for CSV compatibility
             row = {k: (v if v is not None else '') for k, v in row.items()}
             writer.writerow(row)
 
-    print(f"Collated {len(mcts_nodes)} nodes. Saved to {args.out_fpath}.")
+    print(f"Collated {len(mcts_nodes)} nodes. Saved to {out_fpath}.")
+
+
+if __name__ == '__main__':
+    parser = ArgParser()
+    args = parser.parse_args()
+    nodes_to_csv(args.in_fpath, args.out_fpath)

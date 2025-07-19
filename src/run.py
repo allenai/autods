@@ -5,6 +5,7 @@ import numpy as np
 import autogen
 from autogen import GroupChatManager
 from agents import get_agents
+from nodes_to_csv import nodes_to_csv
 from transitions import SpeakerSelector
 from dataset import get_dataset_description, get_blade_description, get_ai2_description, get_datasets_fpaths
 from logger import TreeLogger
@@ -14,6 +15,7 @@ from beliefs import calculate_prior_and_posterior_beliefs, BELIEF_MODE_TO_CLS
 from datetime import datetime
 import random
 import shutil
+from openai import BadRequestError as OpenAIBadRequestError
 
 from reconstruct_mcts import collect_logs_for_resumption
 from args import ArgParser
@@ -362,67 +364,68 @@ def run_mcts(
             exp, new_query = node.get_next_experiment(experiment_generator_agent=experiment_generator_agent)
 
             if new_query is not None:
-                new_level = node.level + 1
-                new_node_idx = len(nodes_by_level[new_level])
-                allow_generate = allow_generate_experiments if new_level > 0 else False
-                child = MCTSNode(new_level, new_node_idx, node.node_idx, new_query, parent=node,
-                                 allow_generate_experiments=allow_generate)
-                node.children.append(child)
-                nodes_by_level[new_level].append(child)
-                node = child
-
-                # Update logger state
-                logger.level = node.level
-                logger.node_idx = node.node_idx
-
-                # Load parent message state
-                if node.parent_idx is not None and node.level - 1 > 0 and node.parent is not None:
-                    if use_min_context:
-                        parent_state = node.parent.get_parent_min_logs(k=k_logs)
-                        # chat_manager.resume expects last manager to be starting message of chat so append it here
-                        # The starting message is used in initiate_chat instead, as prior versions of autodv did (see exploration/agent_shell.py)
-                        # (there might be overall more graceful ways to do this, but this is based on extending the existing code)
-                        parent_state.append({"name": "user_proxy", "role": "user", "content": node.query})
-                    else:
-                        parent_state = logger.load_node(node.level - 1, node.parent_idx)
-                    last_agent, last_message = chat_manager.resume(messages=parent_state)
-
-                # Generate new experiments
-                user_proxy.initiate_chat(recipient=chat_manager, message=node.query, clear_history=False)
-                logger.log_node(node.level, node.node_idx, chat_manager.messages_to_string(groupchat.messages))
-                node.messages = get_current_node_messages(groupchat.messages)
-
-                # Store generated experiments
                 try:
-                    experiments = json.loads(groupchat.messages[-1]['content'])['experiments']
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    # Default to empty list if parsing fails or no experiments found
-                    experiments = []
-                node.untried_experiments = experiments.copy()
+                    new_level = node.level + 1
+                    new_node_idx = len(nodes_by_level[new_level])
+                    allow_generate = allow_generate_experiments if new_level > 0 else False
+                    child = MCTSNode(new_level, new_node_idx, node.node_idx, new_query, parent=node,
+                                     allow_generate_experiments=allow_generate)
+                    node.children.append(child)
+                    nodes_by_level[new_level].append(child)
+                    node = child
 
-                # Calculate beliefs and rewards
-                reward = 0
-                if node.successful:
-                    # Belief elicitation
-                    if not first_iter_is_root or iteration_idx > 0:
-                        is_surprisal, belief_change, prior, posterior = calculate_prior_and_posterior_beliefs(node,
-                                                                                                              model=belief_model_name,
-                                                                                                              temperature=belief_temperature,
-                                                                                                              reasoning_effort=reasoning_effort,
-                                                                                                              n_samples=n_belief_samples,
-                                                                                                              implicit_bayes_posterior=implicit_bayes_posterior,
-                                                                                                              surprisal_width=surprisal_width,
-                                                                                                              belief_mode=belief_mode)
-                        node.surprising = is_surprisal
-                        node.prior = prior
-                        node.posterior = posterior
-                        node.belief_change = belief_change
+                    # Update logger state
+                    logger.level = node.level
+                    logger.node_idx = node.node_idx
 
-                        # Reward based on surprising hypothesis
-                        reward = (1 if node.surprising else 0) if use_binary_reward else node.belief_change
+                    # Load parent message state
+                    if node.parent_idx is not None and node.level - 1 > 0 and node.parent is not None:
+                        if use_min_context:
+                            parent_state = node.parent.get_parent_min_logs(k=k_logs)
+                            # chat_manager.resume expects last manager to be starting message of chat so append it here
+                            # The starting message is used in initiate_chat instead, as prior versions of autodv did (see exploration/agent_shell.py)
+                            # (there might be overall more graceful ways to do this, but this is based on extending the existing code)
+                            parent_state.append({"name": "user_proxy", "role": "user", "content": node.query})
+                        else:
+                            parent_state = logger.load_node(node.level - 1, node.parent_idx)
+                        last_agent, last_message = chat_manager.resume(messages=parent_state)
 
-                        # Print debug information
-                        print(f"""\n\n\
+                    # Generate new experiments
+                    user_proxy.initiate_chat(recipient=chat_manager, message=node.query, clear_history=False)
+                    logger.log_node(node.level, node.node_idx, chat_manager.messages_to_string(groupchat.messages))
+                    node.messages = get_current_node_messages(groupchat.messages)
+
+                    # Store generated experiments
+                    try:
+                        experiments = json.loads(groupchat.messages[-1]['content'])['experiments']
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        # Default to empty list if parsing fails or no experiments found
+                        experiments = []
+                    node.untried_experiments = experiments.copy()
+
+                    # Calculate beliefs and rewards
+                    reward = 0
+                    if node.successful:
+                        # Belief elicitation
+                        if not first_iter_is_root or iteration_idx > 0:
+                            is_surprisal, belief_change, prior, posterior = calculate_prior_and_posterior_beliefs(node,
+                                                                                                                  model=belief_model_name,
+                                                                                                                  temperature=belief_temperature,
+                                                                                                                  reasoning_effort=reasoning_effort,
+                                                                                                                  n_samples=n_belief_samples,
+                                                                                                                  implicit_bayes_posterior=implicit_bayes_posterior,
+                                                                                                                  surprisal_width=surprisal_width,
+                                                                                                                  belief_mode=belief_mode)
+                            node.surprising = is_surprisal
+                            node.prior = prior
+                            node.posterior = posterior
+                            node.belief_change = belief_change
+
+                            # Reward based on surprising hypothesis
+                            reward = (1 if node.surprising else 0) if use_binary_reward else node.belief_change
+
+                            # Print debug information
+                            print(f"""\n\n\
 ================================================================================
 
 NODE_LEVEL={node.level}, NODE_IDX={node.node_idx}:
@@ -437,12 +440,16 @@ Belief Change: {node.belief_change}
 Reward: {reward}
 
 ================================================================================\n\n""")
-                    else:
-                        # For the root node, we don't calculate beliefs or rewards
-                        node.surprising = None
-                        node.prior = None
-                        node.posterior = None
-                        node.belief_change = None
+                        else:
+                            # For the root node, we don't calculate beliefs or rewards
+                            node.surprising = None
+                            node.prior = None
+                            node.posterior = None
+                            node.belief_change = None
+                except OpenAIBadRequestError:
+                    print(f"BadRequestError on iteration {iteration_idx} for node {node.level}_{node.node_idx}. "
+                          "Skipping this node and continuing.")
+                    continue
 
             # MCTS BACKPROPAGATION
             while node:
@@ -456,8 +463,12 @@ Reward: {reward}
     except KeyboardInterrupt:
         print("\n\n######### EXPLORATION INTERRUPTED! SAVING THE CURRENT STATE... #########\n\n")
 
-    # Save nodes at end of MCTS run
-    save_nodes_to_json(nodes_by_level, log_dirname)
+    # Save nodes to JSON
+    nodes_list = save_nodes_to_json(nodes_by_level, log_dirname)
+
+    # Save nodes to CSV
+    csv_output_file = os.path.join(log_dirname, "mcts_nodes.csv")
+    nodes_to_csv(nodes_list, csv_output_file)
 
 
 def save_nodes_to_json(nodes_by_level, log_dirname):
@@ -474,6 +485,7 @@ def save_nodes_to_json(nodes_by_level, log_dirname):
     output_file = os.path.join(log_dirname, "mcts_nodes.json")
     with open(output_file, "w") as f:
         json.dump(node_data, f, indent=2)
+    return node_data
 
 
 def load_mcts_from_json(json_obj_or_file, args):

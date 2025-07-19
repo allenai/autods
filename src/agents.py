@@ -1,12 +1,7 @@
-from io import BytesIO
-from autogen import ConversableAgent, UserProxyAgent, register_function
-from autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalConversableAgent
+from autogen import ConversableAgent, UserProxyAgent
 from structured_outputs import ExperimentList, ExperimentCode, ExperimentAnalyst, Hypothesis, ExperimentReviewer, \
-    ImageAnalysis, Experiment
+    Experiment
 import os
-import matplotlib.pyplot as plt
-from PIL import Image
-import functools
 import json
 from autogen.coding import LocalCommandLineCodeExecutor, DockerCommandLineCodeExecutor
 from typing import Tuple
@@ -16,17 +11,17 @@ from typing import List, Dict
 import autogen.agentchat.contrib.capabilities.transforms as transforms
 from autogen.agentchat.contrib.capabilities import transform_messages
 
-patch_code = """
+IMAGE_ANALYSIS_PATCH = """\
 import matplotlib.pyplot as plt
 import functools
 from io import BytesIO
 import base64
 from openai import OpenAI
-import json
+
 
 client = OpenAI()
 
-analysis_prompt = '''Analyze the given plot image and provide the following:
+image_analyst_prompt = '''Please analyze the given plot image and provide the following:
 
 1. Plot Type: Identify the type of plot (e.g., heatmap, bar plot, scatter plot) and its purpose.
 2. Axes:
@@ -36,59 +31,59 @@ analysis_prompt = '''Analyze the given plot image and provide the following:
     * For scatter plots: note trends, clusters, or outliers.
     * For bar plots: highlight the tallest and shortest bars and patterns.
     * For heatmaps: identify areas of high and low values.
-4. Statistical Insights: Mention any relevant statistics if applicable.
-5. Annotations and Legends: Describe key annotations or legends.
-6. Overall Impression: Summarize insights and implications for further analysis.
-7. Interpretation: Provide insights or perspectives based on the data presented. What conclusions can be drawn?
-8. User Objective: If applicable, address the user's question or objective related to the image.
-9. Limitations: Discuss any limitations or biases in the data that could affect conclusions.'''
+    etc...
+4. Annotations and Legends: Describe key annotations or legends.
+5. Statistical Insights: Provide insights based on the information presented in the plot.'''
+
 
 def image_to_text():
     for fig_num in plt.get_fignums():
-        fig = plt.figure(fig_num)
+        fig = plt.figure(fig_num)  # Get the current figure
         with BytesIO() as buf:
+            # Save the figure to a PNG buffer
             fig.savefig(buf, format='png', dpi=200)
             buf.seek(0)
-            
             # Encode image to base64
             base64_image = base64.b64encode(buf.read()).decode('utf-8')
-            
-            # Create OpenAI message with structured prompt
+            messages = [
+                {
+                    'role': 'system',
+                    'content': 'You are a research scientist responsible for analyzing plots and figures from running experiments and providing detailed descriptions.'
+                },
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'text', 'text': image_analyst_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ]
+            # Get image analysis from the LLM
             response = client.chat.completions.create(
                 model="gpt-4o",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": analysis_prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{base64_image}"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=1000
+                messages=messages,
+                max_tokens=1000,
             )
-            
             analysis = response.choices[0].message.content
-            print(f"\\n=== Plot Analysis ({fig_num}) ===")
+            print(f"\\n=== Plot Analysis (fig. {fig_num}) ===\\n")
             print(analysis)
             print("="*50)
-        
+            
         plt.close(fig)
+
 
 def patch_matplotlib_show():
     # Replace plt.show with our custom function
     plt.show = functools.partial(image_to_text)
 
+
 # Apply the patch
 patch_matplotlib_show()
-
-# Verification
-#print("AI Image analysis enabled.")
 """
 
 
@@ -104,7 +99,7 @@ class CodeBlockWrapperTransform(transforms.MessageTransform):
         except json.JSONDecodeError:
             code = "# Failed to parse code from message"
 
-        message["content"] = f"```python\n{patch_code}\n{code}\n```"
+        message["content"] = f"```python\n{IMAGE_ANALYSIS_PATCH}\n\n{code}\n```"
 
         return transformed_messages
 
@@ -158,24 +153,21 @@ def get_agents(work_dir, n_responses=1, model_name="o4-mini",
             'Explain in natural language what the experiment should do for a programmer (do not provide the code yourself). '
             'Remember, you are interested in open-ended research, so do not hesitate to design experiments that lack a direct connection to the previously executed experiments. '
             'Here are a few instructions that you must follow:\n'
-            '1. Strictly use only the dataset provided and do not create synthetic data or columns that cannot be derived from the given columns.\n'
+            '1. Strictly use only the dataset(s) provided and do not simulate dummy/synthetic data or columns that cannot be derived from the existing columns.\n'
             '2. Each experiment should be creative, independent, and self-contained.\n'
-            '3. Use the prior experiments as inspiration to think of an interesting and creative new experiment. However, do not repeat the same experiment plans.\n\n'
-            'Here are also a few suggestions that may help you propose new experiments:'
-            '1. You are encouraged to create composite attributes derived from the given columns. This is formally known as feature engineering in the machine learning literature.\n'
-            '2. You are encouraged to propose experiments involving complex statistical tests. Remember, your programmer can install python packages via pip which can allow it to write code for complex statistical analyses.\n'
-            '3. You are encouraged to propose experiments involving complex predictive or causal models. '
-            'E.g., propose a non-linear predictive model, such as a gradient-boosted tree or SVM (as appropriate), to model multivariate relationships.\n'
-            '4. You are encouraged to propose experiments that only focus on a subset of the given dataset. This will help create new and interesting contexts for testing hypotheses. '
-            'E.g., if the dataset has multiple categorical variables, you could split the data based on specific values of such variables, which would then allow you to validate a hypothesis in the specific contexts defined by the values of those variables.\n\n'
+            '3. Use the prior experiments as inspiration to think of an interesting and creative new experiment. However, do not repeat the same experiments.\n\n'
+            'Here is a possible approach to coming up with a new experiment:\n'
+            '1. Find an interesting context: this could be a specific subset of the data. E.g., if the dataset has multiple categorical variables, you could split the data based on specific values of such variables, which would then allow you to validate a hypothesis in the specific contexts defined by the values of those variables.\n'
+            '2. Find interesting variables: these could be the columns in the dataset that you find interesting or relevant to the context. You are allowed and encouraged to create composite variables derived from the existing variables.\n'
+            '3. Find interesting relationships: these are interactions between the variables that you find interesting or relevant to the context. You are encouraged to propose experiments involving complex predictive or causal models.\n'
+            '4. You must require that your proposed experiments are verifiable using robust statistical tests. Remember, your programmer can install python packages via pip which can allow it to write code for complex statistical analyses.\n'
+            '5. Multiple datasets: If you are provided with more than one dataset, then try to also propose experiments that utilize contexts, variables, and relationships across the datasets, e.g., this may involve using join or similar operations.\n\n'
             'Generally, in typical data-driven research, you will need to explore and visualize the data for possible high-level insights, clean, transform, or derive new variables from the dataset to be suited for the investigation, deep-dive into specific parts of the data for fine-grained analysis, perform data modeling, and run statistical tests. '
             f'Now, generate exactly {branching_factor} new experiments.'
         ),
         human_input_mode="NEVER",
     )
 
-    # Todo: use shell scripts instead, but make sure the correct conda is used
-    # https://stackoverflow.com/questions/12332975/how-can-i-install-a-python-module-with-pip-programmatically-from-my-code
     install_snippet = ("""\nimport subprocess
 import sys
 
@@ -219,7 +211,7 @@ def install(package):
         llm_config={**llm_config, "response_format": ExperimentAnalyst},
         system_message=(
             'You are a research scientist responsible for evaluating the execution output of code for a scientific experiment written by a programmer. '
-            'If no code was executed or if there was an error, return the error status as **true**. '
+            'If no code was executed, there was an error, or the code fails silently, return the error status as **true**. '
             'If the code includes a line "# [debug]" i.e "[debug]" as a comment, strictly treat this as a debugging experiment. '
             'In such cases, strictly return the error status as **true**, provide information that it was a debug code execution, '
             'take feedback and request the experiment to be retried with the new information. '
@@ -278,18 +270,6 @@ def install(package):
         human_input_mode="NEVER",
     )
 
-    # code_executor = UserProxyAgent(
-    #     name="code_executor",
-    #     description="Agent responsible for executing Python and shell code",
-    #     llm_config=False,
-    #     # code_execution_config=False,
-    #     code_execution_config={"executor": CustomCodeExecutor()},
-    #     human_input_mode="NEVER"
-    # )
-    # code_executor.register_hook("process_message_before_send", format_code_execution_output)
-
-    # register_code_functions(experiment_programmer, code_executor)
-
     ## Timeout Code Executor
     executor = LocalCommandLineCodeExecutor(
         timeout=30 * 60,  # Timeout in seconds
@@ -314,15 +294,6 @@ def install(package):
     transform_messages_capability = transform_messages.TransformMessages(transforms=[CodeBlockWrapperTransform()])
     transform_messages_capability.add_to_agent(code_executor)
 
-    # Image Analyst
-    image_analyst = MultimodalConversableAgent(
-        name="image_analyst",
-        llm_config={**llm_config, "response_format": ImageAnalysis},
-        system_message="You are a research scientist responsible for analyzing plots and figures from running experiments and providing detailed descriptions.",
-        human_input_mode="NEVER",
-    )
-    patch_matplotlib_show(image_analyst)
-
     user_proxy = UserProxyAgent(
         name="user_proxy",
         description="Responsible for providing the initial query",
@@ -332,59 +303,10 @@ def install(package):
 
     agents = [experiment_generator, experiment_programmer, experiment_analyst,
               hypothesis_generator, experiment_reviewer, experiment_reviser,
-              code_executor, image_analyst, user_proxy]
+              code_executor, user_proxy]  # image_analyst
 
     # Apply token limit to all agents
     for agent in agents:
         token_limit_capability.add_to_agent(agent)
 
     return agents
-
-
-image_analyst_prompt = """\
-Please analyze the given plot image and provide the following:
-
-1. Plot Type: Identify the type of plot (e.g., heatmap, bar plot, scatter plot) and its purpose.
-2. Axes:
-    * Titles and labels, including units.
-    * Value ranges for both axes.
-3. Data Trends:
-    * For scatter plots: note trends, clusters, or outliers.
-    * For bar plots: highlight the tallest and shortest bars and patterns.
-    * For heatmaps: identify areas of high and low values.
-    etc...
-4. Annotations and Legends: Describe key annotations or legends.
-5. Statistical Insights: Provide insights based on the information presented in the plot."""
-
-
-def image_to_text(image_analyst):
-    for fig_num in plt.get_fignums():
-        fig = plt.figure(fig_num)  # Get the current figure
-        with BytesIO() as buf:
-            # Save the figure to a PNG buffer
-            fig.savefig(buf, dpi=200)
-            buf.seek(0)
-            message = {
-                'content': [
-                    {'type': 'text', 'text': image_analyst_prompt},
-                    {'type': 'image_url', 'image_url': {'url': Image.open(buf)}},
-                    {'type': 'text', 'text': '.'}
-                ],
-                'role': 'user'
-            }
-            # Generate reply from image_analyst
-            reply = image_analyst.generate_reply(
-                messages=[message],
-            )
-            print(f"\n Plot Analysis ({fig_num}):")
-            print(json.dumps(reply, indent=4, sort_keys=True))
-            # print(f"Plot analysis ({fig_num}):\n{reply}")
-        # Close the figure
-        plt.close(fig)
-
-
-def patch_matplotlib_show(image_analyst):
-    """Patch plt.show to send images to the image analyst"""
-    plt.show = functools.partial(
-        lambda: image_to_text(image_analyst)
-    )
