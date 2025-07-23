@@ -1,3 +1,4 @@
+import copy
 import os
 import json
 from collections import defaultdict
@@ -6,8 +7,9 @@ import autogen
 from autogen import GroupChatManager
 from agents import get_agents
 from nodes_to_csv import nodes_to_csv
+from deduplication import dedupe
 from transitions import SpeakerSelector
-from dataset import get_dataset_description, get_blade_description, get_ai2_description, get_datasets_fpaths
+from dataset import get_dataset_description, get_blade_description, get_datasets_fpaths
 from logger import TreeLogger
 from structured_outputs import Hypothesis
 from typing import Optional
@@ -286,7 +288,6 @@ def run_mcts(
         query,
         dataset_paths,
         log_dirname,
-        thread_id,
         work_dir,
         model_name="o4-mini",
         belief_model_name="gpt-4o",
@@ -299,7 +300,7 @@ def run_mcts(
         use_min_context=False,
         root=None,
         nodes_by_level=None,
-        k_logs=None,
+        k_parents=None,
         temperature=None,
         belief_temperature=None,
         reasoning_effort=None,
@@ -307,28 +308,38 @@ def run_mcts(
         surprisal_width=0.2,
         user_query=None,
         belief_mode="boolean",
-        use_binary_reward=True
+        use_binary_reward=True,
+        run_dedupe=True
 ):
     """
     Run Monte Carlo Tree Search exploration using structured output agents.
 
     Args:
-        dataset: The dataset to analyze
-        query: The initial query to seed the exploration
-        log_dirname: Where to save the logs
-        thread_id: Unique identifier for this run
-        max_iterations: Number of MCTS iterations to run
-        max_depth: Maximum depth of the exploration tree
-        branching_factor: Number of branches at each node
-        exploration_weight: UCB1 exploration parameter
-        temperature: LLM temperature parameter
-        max_rounds: Maximum rounds of conversation
-        allow_generate_experiments: Allow nodes (except root) to generate new experiments on demand
-        n_belief_samples: Number of samples for belief distribution evaluation
-        use_min_context: Use minimal context from parent nodes
-        root: Root node to continue exploration from
-        nodes_by_level: Nodes by level to continue exploration from
-        k_logs: Number of parent levels to include in logs (None for all)
+        query: Initial query to start the exploration.
+        dataset_paths: List of paths to dataset files.
+        log_dirname: Directory to save logs and MCTS nodes.
+        work_dir: Working directory for agents.
+        model_name: LLM model name for agents.
+        belief_model_name: LLM model name for belief distribution agent.
+        max_iterations: Maximum number of MCTS iterations.
+        branching_factor: Maximum number of children per node.
+        max_rounds: Maximum number of rounds for the group chat.
+        selection_method: Function to select nodes in MCTS (default is UCB1).
+        allow_generate_experiments: Whether to allow nodes to generate new experiments on demand.
+        n_belief_samples: Number of samples for belief distribution evaluation.
+        use_min_context: Whether to use minimal context from parent nodes instead of full chat history.
+        root: Optional root MCTSNode to continue from. If None, initializes a new root.
+        nodes_by_level: Optional dictionary to store nodes by level. If None, initializes a new one.
+        k_parents: Number of parent levels to include in logs (None for all).
+        temperature: Temperature setting for all agents (except belief agent).
+        belief_temperature: Temperature setting for the belief agent.
+        reasoning_effort: Reasoning effort for OpenAI o-series models.
+        implicit_bayes_posterior: Whether to use the belief samples with evidence as the direct posterior or to use a Bayesian update that explicitly combines it with the prior.
+        surprisal_width: Minimum difference in mean prior and posterior probabilities required to count as a surprisal.
+        user_query: Custom user query to condition experiment generation during exploration.
+        belief_mode: Belief elicitation mode (boolean, categorical, categorical_numeric, or probability).
+        use_binary_reward: Whether to use binary reward for MCTS instead of a continuous reward (belief change).
+        run_dedupe: Whether to deduplicate nodes before saving to JSON and CSV.
     """
     # Setup logger
     logger = TreeLogger(log_dirname)
@@ -344,7 +355,7 @@ def run_mcts(
     agent_objs = {agent.name: agent for agent in structured_agents}
     user_proxy = agent_objs["user_proxy"]
     # Set up the group chat
-    groupchat = setup_group_chat(agent_objs, max_rounds, thread_id)
+    groupchat = setup_group_chat(agent_objs, max_rounds)
     chat_manager = GroupChatManager(groupchat=groupchat, llm_config=None)
     first_iter_is_root = False
     # Initialize the root node if not continuing from saved state
@@ -362,6 +373,7 @@ def run_mcts(
             node = selection_method(root)
 
             exp, new_query = node.get_next_experiment(experiment_generator_agent=experiment_generator_agent)
+            reward = 0
 
             if new_query is not None:
                 try:
@@ -381,7 +393,7 @@ def run_mcts(
                     # Load parent message state
                     if node.parent_idx is not None and node.level - 1 > 0 and node.parent is not None:
                         if use_min_context:
-                            parent_state = node.parent.get_parent_min_logs(k=k_logs)
+                            parent_state = node.parent.get_parent_min_logs(k=k_parents)
                             # chat_manager.resume expects last manager to be starting message of chat so append it here
                             # The starting message is used in initiate_chat instead, as prior versions of autodv did (see exploration/agent_shell.py)
                             # (there might be overall more graceful ways to do this, but this is based on extending the existing code)
@@ -408,21 +420,24 @@ def run_mcts(
                     if node.successful:
                         # Belief elicitation
                         if not first_iter_is_root or iteration_idx > 0:
-                            is_surprisal, belief_change, prior, posterior = calculate_prior_and_posterior_beliefs(node,
-                                                                                                                  model=belief_model_name,
-                                                                                                                  temperature=belief_temperature,
-                                                                                                                  reasoning_effort=reasoning_effort,
-                                                                                                                  n_samples=n_belief_samples,
-                                                                                                                  implicit_bayes_posterior=implicit_bayes_posterior,
-                                                                                                                  surprisal_width=surprisal_width,
-                                                                                                                  belief_mode=belief_mode)
+                            is_surprisal, belief_change, prior, posterior = calculate_prior_and_posterior_beliefs(
+                                node,
+                                model=belief_model_name,
+                                temperature=belief_temperature,
+                                reasoning_effort=reasoning_effort,
+                                n_samples=n_belief_samples,
+                                implicit_bayes_posterior=implicit_bayes_posterior,
+                                surprisal_width=surprisal_width,
+                                belief_mode=belief_mode
+                            )
                             node.surprising = is_surprisal
                             node.prior = prior
                             node.posterior = posterior
                             node.belief_change = belief_change
 
                             # Reward based on surprising hypothesis
-                            reward = (1 if node.surprising else 0) if use_binary_reward else node.belief_change
+                            reward = (1 if node.surprising else 0) if use_binary_reward else (
+                                node.belief_change if node.belief_change else 0)
 
                             # Print debug information
                             print(f"""\n\n\
@@ -464,14 +479,14 @@ Reward: {reward}
         print("\n\n######### EXPLORATION INTERRUPTED! SAVING THE CURRENT STATE... #########\n\n")
 
     # Save nodes to JSON
-    nodes_list = save_nodes_to_json(nodes_by_level, log_dirname)
+    nodes_list = save_nodes_to_json(nodes_by_level, log_dirname, run_dedupe=run_dedupe)
 
     # Save nodes to CSV
     csv_output_file = os.path.join(log_dirname, "mcts_nodes.csv")
     nodes_to_csv(nodes_list, csv_output_file)
 
 
-def save_nodes_to_json(nodes_by_level, log_dirname):
+def save_nodes_to_json(nodes_by_level, log_dirname, run_dedupe=True):
     """Save all MCTS nodes to a JSON file.
 
     Args:
@@ -480,12 +495,35 @@ def save_nodes_to_json(nodes_by_level, log_dirname):
     """
     node_data = []
     for level, nodes in nodes_by_level.items():
+        if level == 0:
+            continue
         for node in nodes:
             node_data.append(node.to_dict())
+
+    # Optionally deduplicate nodes based on hypothesis
+    if run_dedupe:
+        cluster_labels, clusters = dedupe(node_data)
+        # Dedupe nodes and update cluster information
+        deduped_nodes = []
+        for i, node in enumerate(node_data):
+            cluster_id = cluster_labels[i]
+            if cluster_id != i:
+                continue
+            node_copy = copy.deepcopy(node)
+            node_copy['cluster'] = clusters.get(cluster_id, [])
+            node_copy['cluster_nodes'] = [copy.deepcopy(node_data[n]) for n in node_copy['cluster'] if n != cluster_id]
+            # Map the idxs in 'cluster' to level and node_idx
+            node_copy['cluster'] = [f"{node_data[n]['level']}_{node_data[n]['node_idx']}" for n in node_copy['cluster']]
+            deduped_nodes.append(node_copy)
+        file_to_save = deduped_nodes
+    else:
+        file_to_save = node_data
+
     output_file = os.path.join(log_dirname, "mcts_nodes.json")
     with open(output_file, "w") as f:
-        json.dump(node_data, f, indent=2)
-    return node_data
+        json.dump(file_to_save, f, indent=2)
+    print(f"[JSON] MCTS nodes (n={len(file_to_save)}) saved to {output_file}.\n")
+    return file_to_save
 
 
 def load_mcts_from_json(json_obj_or_file, args):
@@ -568,7 +606,7 @@ def get_current_node_messages(messages):
     return node_messages
 
 
-def setup_group_chat(agents, max_rounds, thread_id):
+def setup_group_chat(agents, max_rounds):
     """Set up the group chat with agents and rules"""
     groupchat = autogen.GroupChat(
         agents=list(agents.values()),
@@ -608,7 +646,7 @@ if __name__ == "__main__":
     print(f"\nArguments saved to {args_file}\n")
 
     # Get dataset paths
-    dataset_paths = get_datasets_fpaths(args.dataset_metadata)
+    dataset_paths = get_datasets_fpaths(args.dataset_metadata, is_blade=args.dataset_metadata_type == 'blade')
 
     if args.continue_from_dir or args.continue_from_json:
         if args.continue_from_dir:
@@ -671,7 +709,6 @@ if __name__ == "__main__":
         query=query,
         dataset_paths=dataset_paths,
         log_dirname=log_dirname,
-        thread_id=timestamp,
         work_dir=work_dirname,
         max_iterations=remaining_iters,
         branching_factor=args.k_experiments,
@@ -681,7 +718,7 @@ if __name__ == "__main__":
         use_min_context=args.use_min_context,
         root=root,
         nodes_by_level=nodes_by_level,
-        k_logs=args.k_logs,
+        k_parents=args.k_parents,
         model_name=args.model,
         belief_model_name=args.belief_model,
         temperature=args.temperature,
@@ -691,7 +728,8 @@ if __name__ == "__main__":
         surprisal_width=args.surprisal_width,
         user_query=args.user_query,
         belief_mode=args.belief_mode,
-        use_binary_reward=args.use_binary_reward
+        use_binary_reward=args.use_binary_reward,
+        run_dedupe=args.dedupe
     )
 
     if args.delete_work_dir:

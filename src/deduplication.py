@@ -99,7 +99,7 @@ def get_llm_merge_decision(hyp1: str, hyp2: str, n_samples: int = 30, threshold:
     return true_prop >= threshold
 
 
-def dedupe(nodes_or_json_path, n_samples=30, merge_threshold=0.7, seed=42):
+def dedupe(nodes_or_json_path, n_samples=30, merge_threshold=0.7, seed=42, rep_mode="biggest"):
     random.seed(seed)
     np.random.seed(seed)
 
@@ -131,7 +131,6 @@ def dedupe(nodes_or_json_path, n_samples=30, merge_threshold=0.7, seed=42):
 
     # Iterate through the linkage matrix to additionally merge clusters based on LLM decisions
     for r, row in enumerate(linkage_matrix):
-        breakpoint()
         hac_node_id = n_dedup + r
         left_hac, right_hac = int(row[0]), int(row[1])
         left_current = hac_to_current.get(left_hac)
@@ -149,12 +148,18 @@ def dedupe(nodes_or_json_path, n_samples=30, merge_threshold=0.7, seed=42):
         )
 
         if llm_decision:
+            if rep_mode == "random":
+                new_rep = random.choice([rep_left, rep_right])
+            elif rep_mode == "biggest":
+                new_rep = rep_left if len(clusters[left_current]) >= len(clusters[right_current]) else rep_right
+            else:
+                raise NotImplementedError
             merged_cluster_id = min(left_current, right_current)
             other_cluster_id = max(left_current, right_current)
             clusters[merged_cluster_id] += clusters[other_cluster_id]
             for idx in clusters[merged_cluster_id]:
                 cluster_assignment[idx] = merged_cluster_id
-            cluster_rep[merged_cluster_id] = random.choice([rep_left, rep_right])
+            cluster_rep[merged_cluster_id] = new_rep
             del clusters[other_cluster_id]
             del cluster_rep[other_cluster_id]
             hac_to_current[hac_node_id] = merged_cluster_id
@@ -162,29 +167,24 @@ def dedupe(nodes_or_json_path, n_samples=30, merge_threshold=0.7, seed=42):
             hac_to_current[hac_node_id] = None
 
     final_labels = [cluster_assignment[orig_to_dedup[i]] for i in range(len(orig_to_dedup))]
-
-    return final_labels, clusters, cluster_assignment, orig_to_dedup
+    return final_labels, clusters
 
 
 if __name__ == "__main__":
     parser = ArgParser()
     args = parser.parse_args()
-    final_labels, clusters, cluster_assignment, orig_to_dedup = dedupe(nodes_or_json_path=args.in_fpath,
-                                                                       n_samples=args.n_samples,
-                                                                       merge_threshold=args.merge_threshold,
-                                                                       seed=args.seed)
+    final_labels, clusters = dedupe(nodes_or_json_path=args.in_fpath,
+                                    n_samples=args.n_samples,
+                                    merge_threshold=args.merge_threshold,
+                                    seed=args.seed)
     print("Final Labels:", final_labels)
     print("Clusters:", clusters)
-    print("Cluster Assignment:", cluster_assignment)
-    print("Original to Deduplicated Mapping:", orig_to_dedup)
 
     if args.out_fpath is not None:
         # Save the results to the output file
         output_data = {
             "final_labels": final_labels,
             "clusters": clusters,
-            "cluster_assignment": cluster_assignment,
-            "orig_to_dedup": orig_to_dedup
         }
         with open(args.out_fpath, 'w') as f:
             json.dump(output_data, f, indent=2)

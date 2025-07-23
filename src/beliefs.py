@@ -453,7 +453,8 @@ def get_belief(
         temperature: float | None = None,
         reasoning_effort: str | None = None,
         use_prior: bool = False,
-        explicit_prior=None
+        explicit_prior=None,
+        n_retries=3
 ):
     """
     Get belief distribution for a hypothesis with optional evidence.
@@ -468,6 +469,7 @@ def get_belief(
         reasoning_effort: Reasoning effort for o-series models
         use_prior: Whether to use implicit Bayesian posterior
         explicit_prior: Optional prior distribution to use for Bayesian updates
+        n_retries: Number of retries for querying the LLM in case of errors
     """
     belief_cls = BELIEF_MODE_TO_CLS.get(belief_mode)
 
@@ -507,16 +509,24 @@ def get_belief(
         all_msgs += evidence
     all_msgs.append(hypothesis_msg)
 
-    response = query_llm(all_msgs, model=model, n_samples=n_samples,
-                         temperature=temperature, reasoning_effort=reasoning_effort,
-                         response_format=belief_cls.ResponseFormat)
-    distribution = belief_cls.parse_response(response)
+    for attempt in range(n_retries):
+        try:
+            response = query_llm(all_msgs, model=model, n_samples=n_samples,
+                                 temperature=temperature, reasoning_effort=reasoning_effort,
+                                 response_format=belief_cls.ResponseFormat)
+            distribution = belief_cls.parse_response(response)
 
-    # If we are using an explicit prior, we need to combine it with the posterior distribution
-    if not use_prior and explicit_prior is not None:
-        mean_belief = belief_cls.get_mean_posterior_belief(distribution, explicit_prior)
-    else:
-        mean_belief = belief_cls.get_mean_belief(distribution)
+            # If we are using an explicit prior, we need to combine it with the posterior distribution
+            if not use_prior and explicit_prior is not None:
+                mean_belief = belief_cls.get_mean_posterior_belief(distribution, explicit_prior)
+            else:
+                mean_belief = belief_cls.get_mean_belief(distribution)
+        except Exception as e:
+            if attempt == n_retries - 1:
+                print(f"Querying LLM: ERROR: {e}\nMax retries reached. Returning empty distribution.")
+                return None, None
+            else:
+                print(f"Querying LLM: ERROR: {e}\nRetrying ({attempt + 1}/{n_retries})...")
 
     return distribution, mean_belief
 
@@ -589,6 +599,9 @@ def calculate_prior_and_posterior_beliefs(node, n_samples=4, model="gpt-4o", tem
         use_prior=implicit_bayes_posterior,
         explicit_prior=prior
     )
+
+    if prior is None or posterior is None:
+        return None, None, None, None
 
     belief_change = abs(posterior_mean - prior_mean)
     is_surprisal = belief_change >= surprisal_width

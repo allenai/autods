@@ -117,13 +117,13 @@ def get_dataset_description(dataset_metadata_path: str) -> str:
     description = []
 
     # Add header
-    description.append("Dataset Description")
+    description.append("##### DATASET DESCRIPTION #####")
     # Add dataset info
-    description.append("\nDatasets:")
+    description.append("\n### DATASETS: ###\n")
     for dataset in metadata['datasets']:
         description.append(f"Dataset Name: {dataset['name']}")
         description.append(f"Dataset Description: {dataset['description']}")
-        description.append("\nColumns:")
+        description.append("\n### COLUMNS: ###")
         for col in dataset['columns']['raw']:
             description.append(f"\n{col['name']}:")
             description.append(f"  {col['description']}")
@@ -131,7 +131,7 @@ def get_dataset_description(dataset_metadata_path: str) -> str:
     return "\n".join(description)
 
 
-def get_datasets_fpaths(dataset_metadata: str) -> list:
+def get_datasets_fpaths(dataset_metadata: str, is_blade=False) -> list:
     # Read the json, loop through "datasets" key, then extract dataset path from "name" key
     with open(dataset_metadata, 'r') as file:
         obj = json.load(file)
@@ -139,7 +139,10 @@ def get_datasets_fpaths(dataset_metadata: str) -> list:
     metadata_parent_path = os.path.dirname(dataset_metadata)
 
     paths = []
-    for d in obj.get('datasets', []):
-        paths.append(os.path.join(metadata_parent_path, d["name"]))
+    if not is_blade:
+        for d in obj.get('datasets', []):
+            paths.append(os.path.join(metadata_parent_path, d["name"]))
+    else:
+        paths.append(os.path.join(metadata_parent_path, "data.csv"))
 
     return paths

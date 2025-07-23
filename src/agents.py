@@ -73,7 +73,7 @@ def image_to_text():
             print(f"\\n=== Plot Analysis (fig. {fig_num}) ===\\n")
             print(analysis)
             print("="*50)
-            
+
         plt.close(fig)
 
 

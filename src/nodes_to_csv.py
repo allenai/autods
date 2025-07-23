@@ -89,7 +89,7 @@ def nodes_to_csv(nodes_or_json_path, out_fpath):
             row = {k: (v if v is not None else '') for k, v in row.items()}
             writer.writerow(row)
 
-    print(f"Collated {len(mcts_nodes)} nodes. Saved to {out_fpath}.")
+    print(f"[CSV] MCTS nodes (n={len(mcts_nodes)}) saved to {out_fpath}.\n")
 
 
 if __name__ == '__main__':
