@@ -729,7 +729,7 @@ if __name__ == "__main__":
         user_query=args.user_query,
         belief_mode=args.belief_mode,
         use_binary_reward=args.use_binary_reward,
-        run_dedupe=args.dedupe
+        run_dedupe=False  # args.dedupe  # TODO: Fix logic
     )
 
     if args.delete_work_dir:
