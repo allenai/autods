@@ -3,20 +3,80 @@ from typing import Optional
 from typing_extensions import Self
 
 
-class Experiment(BaseModel):
+class Relationship(BaseModel):
     """
-    Represents a single experiment with a title, objective, steps, and deliverables.
+    Represents a relationship between two variables in a hypothesis.
 
     Attributes:
-        title (str): Title of the experiment
+        explanatory (str): The independent/explanatory variable in the relationship
+        response (str): The dependent/response variable in the relationship
+        relationship (str): Description of how the explanatory variable affects the response variable
+    """
+    explanatory: str
+    response: str
+    relationship: str
+
+
+class HypothesisDimensions(BaseModel):
+    """
+    Structured representation of the key dimensions of a hypothesis.
+
+    Attributes:
+        contexts (list[str]): List of boundary conditions and assumptions under which the hypothesis holds
+        variables (list[str]): List of key concepts/variables involved in the hypothesis
+        relationships (list[Relationship]): List of causal relationships between pairs of variables
+    """
+    contexts: list[str]
+    variables: list[str]
+    relationships: list[Relationship]
+
+
+class Hypothesis(BaseModel):
+    """
+    A declarative sentence about the state of the world whose truth value may be inferred from the given dataset(s) using an experiment.
+
+    Attributes:
+        hypothesis (str): The hypothesis statement
+        dimensions (HypothesisDimensions): Structured dimensions of the hypothesis
+    """
+    hypothesis: str
+    dimensions: HypothesisDimensions
+
+
+class ExperimentPlan(BaseModel):
+    """
+    Represents the experiment plan with a title, objective, steps, and deliverables.
+
+    Attributes:
         objective (str): The main goal or objective of the experiment
         steps (str): List of steps to be followed to implement the experiment
         deliverables (str): List of expected outcomes or deliverables from the experiment
     """
-    title: str
     objective: str
     steps: str
     deliverables: str
+
+
+class Experiment(BaseModel):
+    """
+        Represents an experiment with a hypothesis and corresponding experiment plan.
+        Attributes:
+            hypothesis (str): A natural-language hypothesis representing an assertion about the world
+            experiment_plan (ExperimentPlan): The structured experiment plan to verify the hypothesis
+        """
+    hypothesis: str
+    experiment_plan: ExperimentPlan
+
+class ExperimentHypothesis(BaseModel):
+    """
+        Represents an experiment with an experiment plan and a hypothesis.
+        Attributes:
+            experiment_plan (ExperimentPlan): A structured experiment plan to verify a hypothesis
+            hypothesis (str): A natural-language hypothesis representing an assertion about the world that can be
+                              tested by the experiment
+        """
+    experiment_plan: ExperimentPlan
+    hypothesis: str
 
 
 class ExperimentList(BaseModel):
@@ -27,6 +87,15 @@ class ExperimentList(BaseModel):
         experiments (list[Experiment]): List of Experiment objects
     """
     experiments: list[Experiment]
+
+class ExperimentHypothesisList(BaseModel):
+    """
+    A collection of experiment hypotheses.
+
+    Attributes:
+        experiments (list[ExperimentHypothesis]): List of ExperimentHypothesis objects
+    """
+    experiments: list[ExperimentHypothesis]
 
 
 class ExperimentCode(BaseModel):
@@ -54,16 +123,16 @@ class ExperimentAnalyst(BaseModel):
     Analysis of experiment results.
 
     Attributes:
-        error (bool): Whether the experiment failed
+        success (bool): Whether the experiment was successful
         analysis (Optional[str]): Detailed analysis of the experiment outcomes
     """
-    error: bool
+    success: bool
     analysis: str
 
     @model_validator(mode='after')
-    def error_required_on_failure(self) -> Self:
-        if not self.error and self.analysis is None:
-            raise ValueError('analysis is required when error is False')
+    def analysis_required_on_success(self) -> Self:
+        if self.success and self.analysis is None:
+            raise ValueError('analysis is required when success is True')
         return self
 
 
@@ -86,46 +155,6 @@ class ExperimentReviewer(BaseModel):
         if not self.success and self.feedback is None:
             raise ValueError('feedback is required when success is False')
         return self
-
-
-class Relationship(BaseModel):
-    """
-    Represents a relationship between two variables in a hypothesis.
-
-    Attributes:
-        explanatory (str): The independent/explanatory variable in the relationship
-        response (str): The dependent/response variable in the relationship 
-        relationship (str): Description of how the explanatory variable affects the response variable
-    """
-    explanatory: str
-    response: str
-    relationship: str
-
-
-class HypothesisDimensions(BaseModel):
-    """
-    Structured representation of the key dimensions of a hypothesis.
-
-    Attributes:
-        contexts (list[str]): List of boundary conditions and assumptions under which the hypothesis holds
-        variables (list[str]): List of key concepts/variables involved in the hypothesis
-        relationships (list[Relationship]): List of causal relationships between pairs of variables
-    """
-    contexts: list[str]
-    variables: list[str]
-    relationships: list[Relationship]
-
-
-class Hypothesis(BaseModel):
-    """
-    A proposed explanation for a phenomenon or a prediction about the outcome of an experiment.
-
-    Attributes:
-        hypothesis (str): The hypothesis statement
-        dimensions (HypothesisDimensions): Structured hypothesis dimensions
-    """
-    hypothesis: str
-    dimensions: HypothesisDimensions
 
 
 class ImageAnalysis(BaseModel):

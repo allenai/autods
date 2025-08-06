@@ -1,9 +1,9 @@
 from autogen import ConversableAgent, UserProxyAgent
-from structured_outputs import ExperimentList, ExperimentCode, ExperimentAnalyst, Hypothesis, ExperimentReviewer, \
-    Experiment
+from src.structured_outputs import ExperimentList, ExperimentCode, ExperimentAnalyst, ExperimentReviewer, Experiment, \
+    ExperimentHypothesisList
 import os
 import json
-from autogen.coding import LocalCommandLineCodeExecutor, DockerCommandLineCodeExecutor
+from autogen.coding import LocalCommandLineCodeExecutor
 from typing import Tuple
 
 import copy
@@ -130,8 +130,8 @@ def get_openai_config(api_key: str | None = None, temperature: float | None = No
     return config
 
 
-def get_agents(work_dir, n_responses=1, model_name="o4-mini",
-               temperature=None, reasoning_effort=None, branching_factor=3, user_query=None) -> list[ConversableAgent]:
+def get_agents(work_dir, model_name="o4-mini", temperature=None, reasoning_effort=None, branching_factor=3,
+               user_query=None, experiment_first=False) -> list[ConversableAgent]:
     llm_config = get_openai_config(api_key=os.getenv("OPENAI_API_KEY"), model_name=model_name, temperature=temperature,
                                    reasoning_effort=reasoning_effort)
 
@@ -141,29 +141,31 @@ def get_agents(work_dir, n_responses=1, model_name="o4-mini",
     ])
 
     # Experiment Generator
-    _user_query_or_empty = f"In particular, you are interested in the following query: {user_query}\n\n" if user_query is not None else ""
+    _user_query_or_empty = f"{user_query}\n\n" if user_query is not None else ""
 
     experiment_generator = ConversableAgent(
         name="experiment_generator",
-        llm_config={**llm_config, "response_format": ExperimentList},
+        llm_config={**llm_config,
+                    "response_format": ExperimentList if not experiment_first else ExperimentHypothesisList},
         system_message=(
-            'You are a research scientist who is interested in doing open-ended, data-driven research using the provided dataset. '
+            'You are a research scientist who is interested in doing open-ended, data-driven research using the provided dataset(s). '
             f'{_user_query_or_empty}'
-            'Be creative and think of an interesting new experiment to conduct. '
-            'Explain in natural language what the experiment should do for a programmer (do not provide the code yourself). '
-            'Remember, you are interested in open-ended research, so do not hesitate to design experiments that lack a direct connection to the previously executed experiments. '
+            'Be creative and think of an interesting new hypothesis and an experiment to verify it. '
+            'The hypothesis should be a falsifiable statement that can be sufficiently tested by the proposed experiment. '
+            'Along with the hypothesis, explain in natural language the experiment plan that the programmer should follow (do not provide the code yourself). '
+            'Remember, you are interested in open-ended research, so do not hesitate to propose hypotheses that lack a direct connection to the previously explored hypotheses. '
             'Here are a few instructions that you must follow:\n'
             '1. Strictly use only the dataset(s) provided and do not simulate dummy/synthetic data or columns that cannot be derived from the existing columns.\n'
-            '2. Each experiment should be creative, independent, and self-contained.\n'
+            '2. Each hypothesis (and experiment plan) should be creative, independent, and self-contained.\n'
             '3. Use the prior experiments as inspiration to think of an interesting and creative new experiment. However, do not repeat the same experiments.\n\n'
-            'Here is a possible approach to coming up with a new experiment:\n'
+            'Here is a possible approach to coming up with a new hypothesis and experiment plan:\n'
             '1. Find an interesting context: this could be a specific subset of the data. E.g., if the dataset has multiple categorical variables, you could split the data based on specific values of such variables, which would then allow you to validate a hypothesis in the specific contexts defined by the values of those variables.\n'
             '2. Find interesting variables: these could be the columns in the dataset that you find interesting or relevant to the context. You are allowed and encouraged to create composite variables derived from the existing variables.\n'
             '3. Find interesting relationships: these are interactions between the variables that you find interesting or relevant to the context. You are encouraged to propose experiments involving complex predictive or causal models.\n'
-            '4. You must require that your proposed experiments are verifiable using robust statistical tests. Remember, your programmer can install python packages via pip which can allow it to write code for complex statistical analyses.\n'
-            '5. Multiple datasets: If you are provided with more than one dataset, then try to also propose experiments that utilize contexts, variables, and relationships across the datasets, e.g., this may involve using join or similar operations.\n\n'
+            '4. You must require that your proposed hypotheses are verifiable using robust statistical tests. Remember, your programmer can install python packages via pip which can allow it to write code for complex statistical analyses.\n'
+            '5. Multiple datasets: If you are provided with more than one dataset, then try to also propose hypotheses that utilize contexts, variables, and relationships across datasets, e.g., this may involve using join or similar operations.\n\n'
             'Generally, in typical data-driven research, you will need to explore and visualize the data for possible high-level insights, clean, transform, or derive new variables from the dataset to be suited for the investigation, deep-dive into specific parts of the data for fine-grained analysis, perform data modeling, and run statistical tests. '
-            f'Now, generate exactly {branching_factor} new experiments.'
+            f'Now, generate exactly {branching_factor} new hypotheses (and experiment plans).'
         ),
         human_input_mode="NEVER",
     )
@@ -179,7 +181,7 @@ def install(package):
         name="experiment_programmer",
         llm_config={**llm_config, "response_format": ExperimentCode},
         system_message=(
-            'You are a scientific experiment programmer proficient in writing python code given an experiment description. '
+            'You are a scientific experiment programmer proficient in writing python code given an experiment plan. '
             'Your code will be included in a python file that is executed and any relevant results should be printed to standard out or presented using plt.show appropriately. '
             'Make sure you provide python code in the proper format to execute. '
             'Ensure your code is clean and concise, and include debug statements only when they are absolutely necessary. '
@@ -194,7 +196,7 @@ def install(package):
             'If the code requires generating plots, use plt.show (not plt.savefig).  '
             'Avoid printing the whole data structure to the console directly if it is large; instead, print concise results that are directly relevant to the experiment. '
             'You are allowed 6 total attempts to run the code, including debugging attempts.\n\n'
-            'Debugging Instructions:\n'
+            'Debugging instructions:\n'
             '1. Only debug if you are either unsure about the executability or validity of the code (i.e., whether it satisfies the proposed experiment).\n'
             '2. If the code you are writing is intended for debugging, the first line of your code must be "# [debug]" only.\n'
             '3. DO NOT use "[debug]" anywhere else in your code.\n'
@@ -207,16 +209,15 @@ def install(package):
 
     # Experiment Analyst
     experiment_analyst = ConversableAgent(
-        name="experiment_analyst",
+        name="experiment_code_analyst",
         llm_config={**llm_config, "response_format": ExperimentAnalyst},
         system_message=(
-            'You are a research scientist responsible for evaluating the execution output of code for a scientific experiment written by a programmer. '
-            'If no code was executed, there was an error, or the code fails silently, return the error status as **true**. '
+            'You are a research scientist responsible for evaluating the code execution output for a scientific experiment written by a programmer. '
+            'If no code was executed, there was an error, or the code fails silently, return the success status as **false**. '
             'If the code includes a line "# [debug]" i.e "[debug]" as a comment, strictly treat this as a debugging experiment. '
-            'In such cases, strictly return the error status as **true**, provide information that it was a debug code execution, '
-            'take feedback and request the experiment to be retried with the new information. '
-            'Otherwise, analyze the results and provide a short summary of the findings from the current experiment. '
-
+            'In such cases, strictly return the success status as **false**, provide information that it was a debug code execution, '
+            'give feedback and request the experiment to be retried with the new information. '
+            'Otherwise, analyze the results and provide a short summary of the findings from the current experiment.'
         ),
         human_input_mode="NEVER",
     )
@@ -233,35 +234,14 @@ def install(package):
         human_input_mode="NEVER",
     )
 
-    # https://docs.ag2.ai/docs/user-guide/advanced-concepts/llm-configuration-deep-dive#extra-model-client-parameters
-    # Hypothesis Generator
-    hypothesis_generator = ConversableAgent(
-        name="hypothesis_generator",
-        llm_config={**llm_config,
-                    "n": n_responses,
-                    "response_format": Hypothesis},
-        system_message=(
-            'You are a research scientist responsible for proposing a plausible hypothesis that can explain the results of the experiment that was just performed. '
-            'The hypothesis should be a falsifiable statement that can be sufficiently tested by the proposed experiment. '
-            'Provide the context, variables, and relationships that are relevant to the hypothesis. '
-            'The context should be a set of boundary conditions for the hypothesis. '
-            'The variables should be the concepts that interact in a meaningful way under the context to produce the hypothesis. '
-            'The relationships should be the interactions between the variables under the context that produces the hypothesis. '
-            'Keep relationships concise. e.g., "inversely proportional", "positive quadratic", "significant predictor", '
-            '"causally mediating", to name a few.\n'
-            '(NOTE: if the experiment plan is "[ROOT] Data Loading", your hypothesis should always be "Dataset will be loaded and analyzed." and the dimensions should be empty.)'
-        ),
-        human_input_mode="NEVER",
-    )
-
     # Experiment Reviser
     experiment_reviser = ConversableAgent(
         name="experiment_reviser",
         llm_config={**llm_config, "response_format": Experiment},
         system_message=(
-            'You are a research scientist revisiting the most recent experiment, which could not be performed effectively due to issues in the code or the formulation of the experiment '
-            'as indicated by the reviewer. Your goal is to revise this failed experiment by addressing the issues and limitations pointed out by the reviewer. '
-            'The revised experiment should still aim to validate the most recent hypothesis. '
+            'You are a research scientist revisiting the most recent experiment, which could not be conducted correctly due to issues in the code or the formulation of the experiment plan,'
+            'as indicated by the reviewer. Your goal is to revise this failed experiment plan by addressing the issues and limitations pointed out by the reviewer. '
+            'The revised experiment plan should still aim to validate the most recent hypothesis. '
             'Do not provide the code yourself but explain in natural language what the experiment should do for a programmer. '
             'Strictly use only the dataset provided and do not create synthetic data or columns that cannot be derived from the given columns. '
             'The experiment should be creative, independent, and self-contained. '
@@ -301,8 +281,7 @@ def install(package):
         human_input_mode="NEVER"
     )
 
-    agents = [experiment_generator, experiment_programmer, experiment_analyst,
-              hypothesis_generator, experiment_reviewer, experiment_reviser,
+    agents = [experiment_generator, experiment_programmer, experiment_analyst, experiment_reviewer, experiment_reviser,
               code_executor, user_proxy]  # image_analyst
 
     # Apply token limit to all agents

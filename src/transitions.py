@@ -21,26 +21,23 @@ class SpeakerSelector:
         messages = groupchat.messages
 
         if last_speaker.name == "user_proxy":
-            return groupchat.agent_by_name("hypothesis_generator")
-
-        elif last_speaker.name == "hypothesis_generator":
             return groupchat.agent_by_name("experiment_programmer")
 
         elif last_speaker.name == "experiment_programmer":
             return groupchat.agent_by_name("code_executor")
 
         elif last_speaker.name == "code_executor":
-            return groupchat.agent_by_name("experiment_analyst")
+            return groupchat.agent_by_name("experiment_code_analyst")
 
-        elif last_speaker.name == "experiment_analyst":
+        elif last_speaker.name == "experiment_code_analyst":
             # Check if experiment failed based on structured response
             content = messages[-1].get("content", "")
             try:
                 response = json.loads(content)
             except json.JSONDecodeError:
                 # If JSON parsing fails, treat it as an error
-                response = {"error": True, "analysis": "Error parsing response"}
-            if response.get("error", True) and self.code_failure_count < 6:
+                response = {"success": False, "analysis": "Error parsing response"}
+            if not response.get("success", False) and self.code_failure_count < 6:
                 self.code_failure_count += 1
                 return groupchat.agent_by_name("experiment_programmer")
             else:

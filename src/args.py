@@ -25,8 +25,6 @@ class ArgParser(argparse.ArgumentParser):
                           help='Path to mcts_nodes.json file to continue exploration from')
         self.add_argument('--n_experiments', type=int, help='Number of MCTS iterations (max_iterations)', required=True)
         self.add_argument('--k_experiments', type=int, default=8, help='Branching factor for experiments (>= 1)')
-        self.add_argument('--pw_k', type=float, help='Progressive widening constant k', default=1.0)
-        self.add_argument('--pw_alpha', type=float, help='Progressive widening exponent alpha', default=0.5)
         self.add_argument('--allow_generate_experiments', action=argparse.BooleanOptionalAction, default=False,
                           help='Allow nodes to generate new experiments on demand')
         self.add_argument('--n_belief_samples', type=int, default=30,
@@ -37,14 +35,16 @@ class ArgParser(argparse.ArgumentParser):
                           default=1.0)
         self.add_argument('--dataset_metadata_type', type=str, choices=['dbench', 'blade'], default='dbench',
                           help='Type of dataset metadata format (dbench, blade, or ai2)')
-        self.add_argument('--use_min_context', action=argparse.BooleanOptionalAction, default=True,
-                          help='Use minimal context from the parent nodes instead of the entire group-chat conversation history.')
         self.add_argument('--work_dir', type=str, required=True, help='Working directory for agents')
         self.add_argument('--delete_work_dir', action=argparse.BooleanOptionalAction, default=True,
                           help='Delete the work directory after exploration')
         self.add_argument('--beam_width', type=int, default=8, help='Beam width for beam search selection method')
         self.add_argument('--use_beam_search', action=argparse.BooleanOptionalAction, default=False,
                           help='Use beam search selection method')
+        self.add_argument("--mcts_selection", type=str, choices=['ucb1', 'beam_search', 'pw'],
+                            default='pw', help="Selection method to use in MCTS (UCB1, beam search, or progressive widening)")
+        self.add_argument('--pw_k', type=float, help='Progressive widening constant k', default=1.0)
+        self.add_argument('--pw_alpha', type=float, help='Progressive widening exponent alpha', default=0.5)
         self.add_argument('--k_parents', type=int, default=3,
                           help='Number of parent levels to include in prompts (None for all)')
         self.add_argument('--implicit_bayes_posterior', action=argparse.BooleanOptionalAction, default=False,
@@ -59,3 +59,7 @@ class ArgParser(argparse.ArgumentParser):
                           help='Use binary reward for MCTS instead of a continuous reward (belief change)')
         self.add_argument('--dedupe', action=argparse.BooleanOptionalAction, default=True,
                           help='Run deduplication after MCTS')
+        self.add_argument('--only_save_results', action=argparse.BooleanOptionalAction, default=False,
+                          help='Only save results without running MCTS')
+        self.add_argument('--experiment_first', action=argparse.BooleanOptionalAction, default=False,
+                          help='Generate experiments before hypotheses')

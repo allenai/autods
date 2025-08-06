@@ -1,4 +1,3 @@
-import os
 from typing import List, Dict
 from pydantic import ValidationError
 from openai import OpenAI
@@ -46,27 +45,11 @@ def query_llm(
     return responses
 
 
-def get_nodes(in_fpath_or_json: str | List[Dict[str, any]]) -> List[Dict[str, any]] | None:
-    """
-    Load MCTS nodes from a file, directory, or a list of dictionaries.
-    Args:
-        in_fpath_or_json: Path to the MCTS nodes JSON file, a directory containing MCTS node files, or a list of MCTS nodes as dictionaries.
-
-    Returns:
-        List of MCTS nodes as dictionaries.
-    """
-    if type(in_fpath_or_json) is list:
-        mcts_nodes = in_fpath_or_json
-    else:
-        # Load the MCTS nodes from the input file
-        if os.path.isdir(in_fpath_or_json):
-            mcts_nodes = []
-            for filename in os.listdir(in_fpath_or_json):
-                if filename.startswith('mcts_node_') and filename.endswith('.json'):
-                    with open(os.path.join(in_fpath_or_json, filename), 'r') as f:
-                        obj = json.load(f)
-                        mcts_nodes.append(obj)
-        else:
-            with open(in_fpath_or_json, 'r') as f:
-                mcts_nodes = json.load(f)
-    return mcts_nodes
+def try_loading_dict(_dict_str):
+    try:
+        return json.loads(_dict_str)
+    except json.JSONDecodeError:
+        try:
+            return json.loads(_dict_str + '"}')  # Fix case where string is truncated
+        except json.JSONDecodeError:
+            return {}

@@ -1,8 +1,8 @@
 import json
 import csv
 import argparse
-from beliefs import BELIEF_MODE_TO_CLS
-from utils import get_nodes
+from src.beliefs import BELIEF_MODE_TO_CLS
+from src.utils import try_loading_dict
 
 
 class ArgParser(argparse.ArgumentParser):
@@ -14,6 +14,7 @@ class ArgParser(argparse.ArgumentParser):
 
 
 def nodes_to_csv(nodes_or_json_path, out_fpath):
+    from src.mcts_utils import get_nodes  # Import here to avoid circular import issues
     mcts_nodes = get_nodes(nodes_or_json_path)
 
     csv_list = []
@@ -24,23 +25,31 @@ def nodes_to_csv(nodes_or_json_path, out_fpath):
         latest_programmer = None
         latest_code_executor = None
         latest_analyst = None
+        latest_reviewer = None
         csv_node = {}
         for msg in reversed(node["messages"]):
-            if not latest_experiment and msg.get("name") in ("user_proxy", "experiment_reviser"):
+            if not latest_experiment and msg.get("name") in ["user_proxy", "experiment_reviser"]:
                 latest_experiment = msg
             elif not latest_programmer and msg.get("name") == "experiment_programmer":
                 latest_programmer = msg
-            elif not latest_analyst and msg.get("name") == "experiment_analyst":
+            elif not latest_analyst and msg.get("name") in ["experiment_analyst", "experiment_code_analyst"]:
                 latest_analyst = msg
             elif not latest_code_executor and msg.get("name") == "code_executor":
                 latest_code_executor = msg
+            elif not latest_reviewer and msg.get("name") == "experiment_reviewer":
+                latest_reviewer = msg
+
+        # Skip if any of these is None
+        if not latest_experiment or not latest_programmer or not latest_analyst:
+            print(f"[CSV] Skipping node {node['level']}_{node['node_idx']} due to missing messages.")
+            continue
 
         try:
-            belief_cls = BELIEF_MODE_TO_CLS['categorical']
+            belief_cls = BELIEF_MODE_TO_CLS[node["prior"]["_type"]]
             prior_distribution = belief_cls.DistributionFormat(**node["prior"])
             posterior_distribution = belief_cls.DistributionFormat(**node["posterior"])
-            prior_mean = belief_cls.get_mean_belief(prior_distribution)
-            posterior_mean = belief_cls.get_mean_posterior_belief(posterior_distribution, prior_distribution)
+            prior_mean = prior_distribution.get_mean_belief()
+            posterior_mean = posterior_distribution.get_mean_belief(prior=prior_distribution)
         except:
             prior_mean = None
             posterior_mean = None
@@ -67,14 +76,17 @@ def nodes_to_csv(nodes_or_json_path, out_fpath):
 
         try:
             experiment_plan = json.loads(latest_experiment['content'])
-            csv_node['experiment_plan'] = f"Title: {experiment_plan.get('title', '')}\n" \
-                                          f"Objective: {experiment_plan.get('objective', '')}\n" \
+            csv_node['experiment_plan'] = f"Objective: {experiment_plan.get('objective', '')}\n" \
                                           f"Steps: {experiment_plan.get('steps', '')}\n" \
                                           f"Deliverables: {experiment_plan.get('deliverables', '')}"
         except Exception:
             csv_node['experiment_plan'] = latest_experiment['content']
 
-        csv_node['analysis'] = json.loads(latest_analyst['content'])['analysis']
+        csv_node['analysis'] = try_loading_dict(latest_analyst['content']).get('analysis', '')
+
+        experiment_review = try_loading_dict(latest_reviewer['content'])
+        csv_node['review_success'] = experiment_review.get('success', False)
+        csv_node['review_feedback'] = experiment_review.get('feedback', 'N/A')
 
         csv_list.append(csv_node)
     csv_list.sort(key=lambda x: x['degree_of_surprisal'] if x['degree_of_surprisal'] is not None else float('-inf'),
@@ -82,14 +94,15 @@ def nodes_to_csv(nodes_or_json_path, out_fpath):
 
     with open(out_fpath, 'w', newline='') as csv_file:
         fieldnames = ['id', 'hypothesis', 'is_surprise', 'degree_of_surprisal', 'direction_of_surprisal',
-                      'prior_belief', 'posterior_belief', 'experiment_plan', 'analysis']
+                      'prior_belief', 'posterior_belief', 'experiment_plan', 'analysis', 'review_success',
+                      'review_feedback']
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for row in csv_list:
             row = {k: (v if v is not None else '') for k, v in row.items()}
             writer.writerow(row)
 
-    print(f"[CSV] MCTS nodes (n={len(mcts_nodes)}) saved to {out_fpath}.\n")
+    print(f"[CSV] MCTS nodes (n={len(csv_list)}; skipping root) saved to {out_fpath}.\n")
 
 
 if __name__ == '__main__':

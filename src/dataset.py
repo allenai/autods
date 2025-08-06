@@ -105,10 +105,10 @@ def load_dataset_metadata(dataset_metadata_path: str, dataset_metadata_key: str 
 def get_dataset_description(dataset_metadata_path: str) -> str:
     """
     Generate a human-readable description of the dataset based on its metadata.
-
+    
     Args:
         dataset_metadata_path: Path to the dataset metadata JSON file
-
+    
     Returns:
         str: Formatted description of the dataset
     """

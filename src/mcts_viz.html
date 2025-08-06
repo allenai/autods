@@ -15,14 +15,14 @@
             height: 100vh;
             box-sizing: border-box;
         }
-        
+
         .container {
             display: flex;
             flex: 1;
             margin-top: 20px;
             min-height: 0; /* Required for Firefox */
         }
-        
+
         #tree-container {
             flex: 1;
             border: 1px solid #ccc;
@@ -30,7 +30,7 @@
             overflow: auto;
             min-height: 0; /* Required for Firefox */
         }
-        
+
         #details-panel {
             flex: 1;
             border: 1px solid #ccc;
@@ -40,59 +40,59 @@
             min-height: 0; /* Required for Firefox */
             width: 400px; /* Set fixed width for details panel */
         }
-        
+
         .node circle {
-            display: none;  /* Hide default circle */
+            display: none; /* Hide default circle */
         }
 
         .node-half-prior {
-            fill: #9E9E9E;  /* Default grey */
+            fill: #9E9E9E; /* Default grey */
             stroke: #fff;
             stroke-width: 1.5px;
         }
 
         .node-half-posterior {
-            fill: #9E9E9E;  /* Default grey */
+            fill: #9E9E9E; /* Default grey */
             stroke: #fff;
             stroke-width: 1.5px;
         }
 
         .node.reviewed .node-half-prior.positive {
-            fill: #4CAF50;  /* Green */
+            fill: #4CAF50; /* Green */
         }
 
         .node.reviewed .node-half-prior.negative {
-            fill: #f44336;  /* Red */
+            fill: #f44336; /* Red */
         }
 
         .node.reviewed .node-half-posterior.positive {
-            fill: #4CAF50;  /* Green */
+            fill: #4CAF50; /* Green */
         }
 
         .node.reviewed .node-half-posterior.negative {
-            fill: #f44336;  /* Red */
+            fill: #f44336; /* Red */
         }
-        
+
         .link {
             fill: none;
             stroke: #ccc;
             stroke-width: 1.5px;
             stroke-opacity: 0.7;
         }
-        
+
         .upload-area {
             margin-bottom: 20px;
             padding: 10px;
             border: 2px dashed #ccc;
             text-align: center;
         }
-        
+
         .file-list {
             display: flex;
             flex-wrap: wrap;
             margin-top: 10px;
         }
-        
+
         .file-item {
             background: #f0f0f0;
             padding: 5px 10px;
@@ -100,11 +100,11 @@
             border-radius: 3px;
             font-size: 14px;
         }
-        
+
         h1, h2, h3 {
             color: #333;
         }
-        
+
         pre {
             background: #f5f5f5;
             padding: 10px;
@@ -112,18 +112,18 @@
             max-height: 200px;
             border-radius: 4px;
         }
-        
+
         .belief-distribution {
             margin: 10px 0;
         }
-        
+
         .belief-bar {
             height: 20px;
             width: 100%;
             display: flex;
             margin: 5px 0;
         }
-        
+
         .belief-segment {
             height: 100%;
             display: flex;
@@ -132,11 +132,11 @@
             color: white;
             font-size: 12px;
         }
-        
+
         .belief-positive {
             background-color: #4CAF50;
         }
-        
+
         .belief-negative {
             background-color: #f44336;
         }
@@ -150,317 +150,317 @@
             padding: 10px 15px;
             border-radius: 4px;
             font-weight: bold;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
     </style>
 </head>
 <body>
-    <h1>MCTS Tree Visualization</h1>
-    
-    <div class="surprise-counter" id="surprise-counter">
-        Surprising Results: 0
-    </div>
-    
-    <div class="upload-area" id="upload-area">
-        <p>Drop MCTS log file here or click to upload</p>
-        <input type="file" id="file-upload" accept=".json" style="display: none">
-        <div class="file-list" id="file-list"></div>
-    </div>
-    
-    <div class="container">
-        <div id="tree-container"></div>
-        <div id="details-panel">
-            <h2>Node Details</h2>
-            <p>Click on a node to view details</p>
-        </div>
-    </div>
-    
-    <script>
-        let treeData = null;
-        let selectedNode = null;
+<h1>MCTS Tree Visualization</h1>
 
-        function handleFiles(files) {
-            if (files.length === 0) return;
-            
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const nodes = JSON.parse(e.target.result);
-                    processNodes(nodes);
-                } catch (e) {
-                    console.error('Error parsing file:', e);
-                }
-            };
-            reader.readAsText(files[0]);
+<div class="surprise-counter" id="surprise-counter">
+    Surprising Results: 0
+</div>
+
+<div class="upload-area" id="upload-area">
+    <p>Drop MCTS log file here or click to upload</p>
+    <input type="file" id="file-upload" accept=".json" style="display: none">
+    <div class="file-list" id="file-list"></div>
+</div>
+
+<div class="container">
+    <div id="tree-container"></div>
+    <div id="details-panel">
+        <h2>Node Details</h2>
+        <p>Click on a node to view details</p>
+    </div>
+</div>
+
+<script>
+    let treeData = null;
+    let selectedNode = null;
+
+    function handleFiles(files) {
+        if (files.length === 0) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const nodes = JSON.parse(e.target.result);
+                processNodes(nodes);
+            } catch (e) {
+                console.error('Error parsing file:', e);
+            }
+        };
+        reader.readAsText(files[0]);
+    }
+
+    function processNodes(nodes) {
+        // Create root node
+        const root = nodes.find(n => n.level === 0);
+        if (!root) return;
+
+        // Group nodes by level for efficient lookup
+        const nodesByLevel = {};
+        nodes.forEach(node => {
+            if (!nodesByLevel[node.level]) {
+                nodesByLevel[node.level] = [];
+            }
+            nodesByLevel[node.level].push(node);
+        });
+
+        // Build tree structure starting from root
+        treeData = buildTreeNode(root, nodesByLevel);
+        renderTree();
+        updateSurpriseCounter(nodes);
+    }
+
+    function updateSurpriseCounter(nodes) {
+        const surprisingCount = nodes.filter(n => n.surprising).length;
+        document.getElementById('surprise-counter').textContent =
+            `Surprising Results: ${surprisingCount}`;
+    }
+
+    function buildTreeNode(node, nodesByLevel) {
+        const treeNode = {
+            id: node.node_idx,
+            level: node.level,
+            data: node,
+            children: []
+        };
+
+        // Get next level nodes
+        const childLevel = node.level + 1;
+        if (nodesByLevel[childLevel]) {
+            // Find children for this node
+            const children = nodesByLevel[childLevel].filter(n => n.parent_idx === node.node_idx);
+            treeNode.children = children.map(child => buildTreeNode(child, nodesByLevel));
         }
 
-        function processNodes(nodes) {
-            // Create root node
-            const root = nodes.find(n => n.level === 0);
-            if (!root) return;
+        return treeNode;
+    }
 
-            // Group nodes by level for efficient lookup
-            const nodesByLevel = {};
-            nodes.forEach(node => {
-                if (!nodesByLevel[node.level]) {
-                    nodesByLevel[node.level] = [];
-                }
-                nodesByLevel[node.level].push(node);
+    function renderTree() {
+        if (!treeData) return;
+
+        d3.select("#tree-container").selectAll("*").remove();
+
+        const width = document.getElementById('tree-container').offsetWidth;
+        const height = document.getElementById('tree-container').offsetHeight;
+
+        const margin = {top: 40, right: 20, bottom: 30, left: 20};
+        const innerWidth = width - margin.left - margin.right;
+        const innerHeight = height - margin.top - margin.bottom;
+
+        // Create the SVG container
+        const svg = d3.select("#tree-container")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height);
+
+        // Add zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 3])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
             });
 
-            // Build tree structure starting from root
-            treeData = buildTreeNode(root, nodesByLevel);
-            renderTree();
-            updateSurpriseCounter(nodes);
-        }
+        svg.call(zoom);
 
-        function updateSurpriseCounter(nodes) {
-            const surprisingCount = nodes.filter(n => n.surprising).length;
-            document.getElementById('surprise-counter').textContent = 
-                `Surprising Results: ${surprisingCount}`;
-        }
+        // Create a group for the tree
+        const g = svg.append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
 
-        function buildTreeNode(node, nodesByLevel) {
-            const treeNode = {
-                id: node.node_idx,
-                level: node.level,
-                data: node,
-                children: []
-            };
+        // Configure tree layout with minimal spacing
+        const treeLayout = d3.tree()
+            .size([innerWidth, innerHeight * 0.6]) // Reduce vertical space to 60%
+            .separation((a, b) => (a.parent === b.parent ? 1 : 1.1) * 6); // Reduce separation multiplier
+        const root = d3.hierarchy(treeData);
+        const tree = treeLayout(root);
 
-            // Get next level nodes
-            const childLevel = node.level + 1;
-            if (nodesByLevel[childLevel]) {
-                // Find children for this node
-                const children = nodesByLevel[childLevel].filter(n => n.parent_idx === node.node_idx);
-                treeNode.children = children.map(child => buildTreeNode(child, nodesByLevel));
-            }
+        // Create curved links (vertical orientation)
+        g.selectAll(".link")
+            .data(tree.links().filter(d => d.source.data.level !== 0))
+            .enter()
+            .append("path")
+            .attr("class", "link")
+            .attr("d", d3.linkVertical()
+                .x(d => d.x)
+                .y(d => d.y)
+            );
 
-            return treeNode;
-        }
+        const node = g.selectAll(".node")
+            .data(tree.descendants().filter(d => d.data.level !== 0))
+            .enter()
+            .append("g")
+            .attr("class", d => {
+                const classes = ["node"];
+                classes.push(`node-${d.data.level}-${d.data.data.node_idx}`);
+                const hasReview = d.data.data.messages?.some(m => m.name === 'experiment_reviewer');
+                if (hasReview) {
+                    classes.push("reviewed");
+                    if (d.data.data.surprising) classes.push("surprising");
+                }
+                return classes.join(" ");
+            })
+            .attr("transform", d => `translate(${d.x},${d.y})`)
+            .on("click", (event, d) => showNodeDetails(d.data));
 
-        function renderTree() {
-            if (!treeData) return;
-            
-            d3.select("#tree-container").selectAll("*").remove();
-            
-            const width = document.getElementById('tree-container').offsetWidth;
-            const height = document.getElementById('tree-container').offsetHeight;
-            
-            const margin = { top: 40, right: 20, bottom: 30, left: 20 };
-            const innerWidth = width - margin.left - margin.right;
-            const innerHeight = height - margin.top - margin.bottom;
-            
-            // Create the SVG container
-            const svg = d3.select("#tree-container")
-                .append("svg")
-                .attr("width", width)
-                .attr("height", height);
+        // Draw top half (prior)
+        node.append("path")
+            .attr("d", d => {
+                const r = 8;
+                return `M${-r},0 A${r},${r} 0 0,1 ${r},0`;
+            })
+            .attr("class", d => {
+                const classes = ["node-half-prior"];
+                if (d.data.data.prior?.believes_hypothesis) {
+                    classes.push("positive");
+                } else if (d.data.data.prior?.believes_hypothesis === false) {
+                    classes.push("negative");
+                }
+                return classes.join(" ");
+            });
 
-            // Add zoom behavior
-            const zoom = d3.zoom()
-                .scaleExtent([0.1, 3])
-                .on("zoom", (event) => {
-                    g.attr("transform", event.transform);
-                });
+        // Draw bottom half (posterior)
+        node.append("path")
+            .attr("d", d => {
+                const r = 8;
+                return `M${-r},0 A${r},${r} 0 0,0 ${r},0`;
+            })
+            .attr("class", d => {
+                const classes = ["node-half-posterior"];
+                if (d.data.data.posterior?.believes_hypothesis) {
+                    classes.push("positive");
+                } else if (d.data.data.posterior?.believes_hypothesis === false) {
+                    classes.push("negative");
+                }
+                return classes.join(" ");
+            });
 
-            svg.call(zoom);
-            
-            // Create a group for the tree
-            const g = svg.append("g")
-                .attr("transform", `translate(${margin.left},${margin.top})`);
-            
-            // Configure tree layout with minimal spacing
-            const treeLayout = d3.tree()
-                .size([innerWidth, innerHeight * 0.6]) // Reduce vertical space to 60%
-                .separation((a, b) => (a.parent === b.parent ? 1 : 1.1) * 6); // Reduce separation multiplier
-            const root = d3.hierarchy(treeData);
-            const tree = treeLayout(root);
-            
-            // Create curved links (vertical orientation)
-            g.selectAll(".link")
-                .data(tree.links().filter(d => d.source.data.level !== 0))
-                .enter()
-                .append("path")
-                .attr("class", "link")
-                .attr("d", d3.linkVertical()
-                    .x(d => d.x)
-                    .y(d => d.y)
-                );
-            
-            const node = g.selectAll(".node")
-                .data(tree.descendants().filter(d => d.data.level !== 0))
-                .enter()
-                .append("g")
-                .attr("class", d => {
-                    const classes = ["node"];
-                    classes.push(`node-${d.data.level}-${d.data.data.node_idx}`);
-                    const hasReview = d.data.data.messages?.some(m => m.name === 'experiment_reviewer');
-                    if (hasReview) {
-                        classes.push("reviewed");
-                        if (d.data.data.surprising) classes.push("surprising");
-                    }
-                    return classes.join(" ");
-                })
-                .attr("transform", d => `translate(${d.x},${d.y})`)
-                .on("click", (event, d) => showNodeDetails(d.data));
-            
-            // Draw top half (prior)
-            node.append("path")
-                .attr("d", d => {
-                    const r = 8;
-                    return `M${-r},0 A${r},${r} 0 0,1 ${r},0`;
-                })
-                .attr("class", d => {
-                    const classes = ["node-half-prior"];
-                    if (d.data.data.prior?.believes_hypothesis) {
-                        classes.push("positive");
-                    } else if (d.data.data.prior?.believes_hypothesis === false) {
-                        classes.push("negative");
-                    }
-                    return classes.join(" ");
-                });
+        // Remove old circle append and keep text
+        node.append("text")
+            .attr("dy", "1.5em")  // Position text below node for vertical layout
+            .attr("x", 0)
+            .attr("text-anchor", "middle")
+            .text(d => `${d.data.data.value}/${d.data.data.visits}`);
 
-            // Draw bottom half (posterior)
-            node.append("path")
-                .attr("d", d => {
-                    const r = 8;
-                    return `M${-r},0 A${r},${r} 0 0,0 ${r},0`;
-                })
-                .attr("class", d => {
-                    const classes = ["node-half-posterior"];
-                    if (d.data.data.posterior?.believes_hypothesis) {
-                        classes.push("positive");
-                    } else if (d.data.data.posterior?.believes_hypothesis === false) {
-                        classes.push("negative");
-                    }
-                    return classes.join(" ");
-                });
+        // Update initial transform for closer view
+        const initialTransform = d3.zoomIdentity
+            .translate(width / 2 - innerWidth / 2, 20)
+            .scale(0.9);
+        svg.call(zoom.transform, initialTransform);
+    }
 
-            // Remove old circle append and keep text
-            node.append("text")
-                .attr("dy", "1.5em")  // Position text below node for vertical layout
-                .attr("x", 0)
-                .attr("text-anchor", "middle")
-                .text(d => `${d.data.data.value}/${d.data.data.visits}`);
+    function showNodeDetails(node) {
+        selectedNode = node;
+        d3.selectAll(".node").classed("selected", false);
+        d3.select(`.node-${node.data.level}-${node.data.node_idx}`).classed("selected", true);
 
-            // Update initial transform for closer view
-            const initialTransform = d3.zoomIdentity
-                .translate(width/2 - innerWidth/2, 20)
-                .scale(0.9);
-            svg.call(zoom.transform, initialTransform);
-        }
+        const detailsPanel = document.getElementById('details-panel');
+        const data = node.data;
 
-        function showNodeDetails(node) {
-            selectedNode = node;
-            d3.selectAll(".node").classed("selected", false);
-            d3.select(`.node-${node.data.level}-${node.data.node_idx}`).classed("selected", true);
-            
-            const detailsPanel = document.getElementById('details-panel');
-            const data = node.data;
-            
-            let html = `
+        let html = `
                 <h2>Node ${data.level}_${data.node_idx}</h2>
                 <p><strong>Visits:</strong> ${data.visits}</p>
                 <p><strong>Value:</strong> ${data.value}</p>
             `;
 
-            // Extract messages by role
-            if (data.messages) {
-                const experimentPlan = data.messages.find(m => m.name === 'user_proxy');
-                const hypothesis = data.messages.find(m => m.name === 'hypothesis_generator');
-                const analysis = data.messages.find(m => m.name === 'experiment_analyst');
-                const review = data.messages.find(m => m.name === 'experiment_reviewer');
+        // Extract messages by role
+        if (data.messages) {
+            const experimentPlan = data.messages.find(m => m.name === 'user_proxy');
+            const hypothesis = data.messages.find(m => m.name === 'hypothesis_generator');
+            const analysis = data.messages.find(m => ['experiment_analyst', 'experiment_code_analyst'].includes(m.name));
+            const review = data.messages.find(m => m.name === 'experiment_reviewer');
 
-                if (experimentPlan) {
-                    html += `<h3>Experiment Plan</h3><pre>${experimentPlan.content}</pre>`;
-                }
+            if (experimentPlan) {
+                html += `<h3>Experiment Plan</h3><pre>${experimentPlan.content}</pre>`;
+            }
 
-                if (hypothesis) {
-                    try {
-                        const hypothesisObj = JSON.parse(hypothesis.content);
-                        html += `<h3>Hypothesis</h3><pre>${JSON.stringify(hypothesisObj.hypothesis, null, 2)}</pre>`;
-                    } catch (e) {
-                        html += `<h3>Hypothesis</h3><pre>${hypothesis.content}</pre>`;
-                    }
-                }
-
-                if (analysis) {
-                    try {
-                        const analysisObj = JSON.parse(analysis.content);
-                        html += `<h3>Analysis</h3><pre>${analysisObj.analysis}</pre>`;
-                    } catch (e) {
-                        html += `<h3>Analysis</h3><pre>${analysis.content}</pre>`;
-                    }
-                }
-
-                if (review) {
-                    try {
-                        const reviewObj = JSON.parse(review.content);
-                        html += `<h3>Review</h3><pre>${reviewObj.feedback}</pre>`;
-                    } catch (e) {
-                        html += `<h3>Review</h3><pre>${review.content}</pre>`;
-                    }
+            if (hypothesis) {
+                try {
+                    const hypothesisObj = JSON.parse(hypothesis.content);
+                    html += `<h3>Hypothesis</h3><pre>${JSON.stringify(hypothesisObj.hypothesis, null, 2)}</pre>`;
+                } catch (e) {
+                    html += `<h3>Hypothesis</h3><pre>${hypothesis.content}</pre>`;
                 }
             }
 
-            // Add belief distributions
-            if (data.prior || data.posterior) {
-                html += `<h3>Belief Distribution</h3>`;
-                
-                if (data.prior) {
-                    const {n_positive = 0, n_negative = 0} = data.prior;
-                    const total = n_positive + n_negative;
-                    html += `
+            if (analysis) {
+                try {
+                    const analysisObj = JSON.parse(analysis.content);
+                    html += `<h3>Analysis</h3><pre>${analysisObj.analysis}</pre>`;
+                } catch (e) {
+                    html += `<h3>Analysis</h3><pre>${analysis.content}</pre>`;
+                }
+            }
+
+            if (review) {
+                try {
+                    const reviewObj = JSON.parse(review.content);
+                    html += `<h3>Review</h3><pre>${reviewObj.feedback}</pre>`;
+                } catch (e) {
+                    html += `<h3>Review</h3><pre>${review.content}</pre>`;
+                }
+            }
+        }
+
+        // Add belief distributions
+        if (data.prior || data.posterior) {
+            html += `<h3>Belief Distribution</h3>`;
+
+            if (data.prior) {
+                const {n_positive = 0, n_negative = 0} = data.prior;
+                const total = n_positive + n_negative;
+                html += `
                         <div class="belief-distribution">
                             <div>Prior</div>
                             <div class="belief-bar">
                                 <div class="belief-segment belief-positive" 
-                                     style="width: ${(n_positive/total)*100}%">
+                                     style="width: ${(n_positive / total) * 100}%">
                                     ${n_positive}
                                 </div>
                                 <div class="belief-segment belief-negative" 
-                                     style="width: ${(n_negative/total)*100}%">
+                                     style="width: ${(n_negative / total) * 100}%">
                                     ${n_negative}
                                 </div>
                             </div>
                         </div>`;
-                }
-                
-                if (data.posterior) {
-                    const {n_positive = 0, n_negative = 0} = data.posterior;
-                    const total = n_positive + n_negative;
-                    html += `
+            }
+
+            if (data.posterior) {
+                const {n_positive = 0, n_negative = 0} = data.posterior;
+                const total = n_positive + n_negative;
+                html += `
                         <div class="belief-distribution">
                             <div>Posterior</div>
                             <div class="belief-bar">
                                 <div class="belief-segment belief-positive" 
-                                     style="width: ${(n_positive/total)*100}%">
+                                     style="width: ${(n_positive / total) * 100}%">
                                     ${n_positive}
                                 </div>
                                 <div class="belief-segment belief-negative" 
-                                     style="width: ${(n_negative/total)*100}%">
+                                     style="width: ${(n_negative / total) * 100}%">
                                     ${n_negative}
                                 </div>
                             </div>
                         </div>`;
-                }
             }
-
-            detailsPanel.innerHTML = html;
         }
 
-        // Initialize upload handlers
-        const uploadArea = document.getElementById('upload-area');
-        const fileUpload = document.getElementById('file-upload');
+        detailsPanel.innerHTML = html;
+    }
 
-        uploadArea.addEventListener('click', () => fileUpload.click());
-        uploadArea.addEventListener('dragover', (e) => e.preventDefault());
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            handleFiles(e.dataTransfer.files);
-        });
-        fileUpload.addEventListener('change', (e) => handleFiles(e.target.files));
-    </script>
+    // Initialize upload handlers
+    const uploadArea = document.getElementById('upload-area');
+    const fileUpload = document.getElementById('file-upload');
+
+    uploadArea.addEventListener('click', () => fileUpload.click());
+    uploadArea.addEventListener('dragover', (e) => e.preventDefault());
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        handleFiles(e.dataTransfer.files);
+    });
+    fileUpload.addEventListener('change', (e) => handleFiles(e.target.files));
+</script>
 </body>
 </html>

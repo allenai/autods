@@ -1,8 +1,9 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from pydantic import BaseModel, Field
 import tiktoken
 
-from utils import query_llm
+from src.mcts import MCTSNode
+from src.utils import query_llm
 
 
 class BeliefTrueFalse:
@@ -14,36 +15,65 @@ class BeliefTrueFalse:
             n: Number of samples used to compute the distribution
             n_true: Number of "true" responses
             n_false: Number of "false" responses
+            mean: Mean belief probability (optional, computed if not provided)
+            prior_params: Parameters for the prior Beta distribution (alpha, beta)
         """
 
         def __init__(self,
                      n: int = Field(..., description="Number of samples used to compute the distribution"),
                      n_true: int = Field(..., description='Number of "true" responses'),
-                     n_false: int = Field(..., description='Number of "false" responses')):
+                     n_false: int = Field(..., description='Number of "false" responses'),
+                     mean: float | None = None,
+                     prior_params: Tuple[float, float] = (1.0, 1.0),
+                     **kwargs):
             self.n = n
             self.n_true = n_true
             self.n_false = n_false
+            self.mean = mean
+            self.prior_params = prior_params
 
         def __repr__(self):
             return f"BeliefTrueFalse.DistributionFormat(n={self.n}, n_true={self.n_true}, n_false={self.n_false})"
 
         def to_dict(self):
             return {
+                "_type": "boolean",
                 "n": self.n,
                 "n_true": self.n_true,
-                "n_false": self.n_false
+                "n_false": self.n_false,
+                "mean": self.mean,
             }
+
+        def get_mean_belief(self, prior=None) -> float:
+            """
+            Get the mean of the prior/posterior belief distribution.
+
+            Returns:
+                float: The mean belief probability.
+            """
+            if self.mean is None:
+                if prior is None:
+                    # Assuming a uniform Beta(1,1) prior, we can compute the mean belief using the Beta distribution
+                    self.mean = (self.prior_params[0] + self.n_true) / (self.n + sum(self.prior_params))
+                else:
+                    # Bayesian update: Beta(n_true + a, n_false + b) where a and b are prior parameters
+                    post_alpha = prior.n_true + prior.prior_params[0]
+                    # post_beta = prior.n_false + prior.prior_params[1]
+                    self.mean = (self.n_true + post_alpha) / (self.n + prior.n + sum(prior.prior_params))
+            return self.mean
 
     class ResponseFormat(BaseModel):
         belief: bool = Field(..., description="Whether the hypothesis is true")
 
     @staticmethod
-    def parse_response(response: List[dict]) -> 'BeliefTrueFalse.DistributionFormat':
+    def parse_response(response: List[dict],
+                       prior_params: Tuple[float, float] = (1.0, 1.0)) -> 'BeliefTrueFalse.DistributionFormat':
         """
         Parse the response from the LLM into a DistributionFormat.
 
         Args:
             response (dict): The response from the LLM containing belief counts.
+            prior_params (Tuple[float, float]): Parameters for the prior Beta distribution (alpha, beta).
 
         Returns:
             BeliefTrueFalse.DistributionFormat: Parsed distribution format.
@@ -56,34 +86,7 @@ class BeliefTrueFalse:
             else:
                 n_false += 1
 
-        return BeliefTrueFalse.DistributionFormat(n=n, n_true=n_true, n_false=n_false)
-
-    @staticmethod
-    def get_mean_belief(obj: 'BeliefTrueFalse.DistributionFormat') -> float:
-        # Assuming a uniform Beta(1,1) prior, we can compute the mean belief using the Beta distribution
-        prior_param = 1.0
-        return (prior_param + obj.n_true) / (obj.n + 2 * prior_param)
-
-    @staticmethod
-    def get_mean_posterior_belief(
-            obj: 'BeliefTrueFalse.DistributionFormat',
-            prior: 'BeliefTrueFalse.DistributionFormat'
-    ) -> float:
-        """
-        Get the mean posterior belief from the distribution format and prior.
-
-        Args:
-            obj (BeliefTrueFalse.DistributionFormat): The distribution format object.
-            prior (BeliefTrueFalse.DistributionFormat): The prior distribution format object.
-
-        Returns:
-            float: The mean posterior belief probability.
-        """
-        # Bayesian update: Beta(n_true + a, n_false + b) where a and b are prior parameters
-        prior_param = 1.0
-        post_alpha = prior.n_true + prior_param
-        # post_beta = prior.n_false + prior_param
-        return (obj.n_true + post_alpha) / (obj.n + prior.n + 2 * prior_param)
+        return BeliefTrueFalse.DistributionFormat(n=n, n_true=n_true, n_false=n_false, prior_params=prior_params)
 
 
 class BeliefCategorical:
@@ -105,6 +108,8 @@ class BeliefCategorical:
             uncertain: Number of "uncertain" responses
             partially_false: Number of "partially false" responses
             definitely_false: Number of "definitely false" responses
+            mean: Mean belief probability (optional, computed if not provided)
+            prior_params: Parameters for the prior Dirichlet distribution (alpha1, alpha2, alpha3, alpha4, alpha5)
         """
 
         def __init__(self,
@@ -113,13 +118,18 @@ class BeliefCategorical:
                      partially_true: int = Field(..., description='Number of "partially true" responses'),
                      uncertain: int = Field(..., description='Number of "uncertain" responses'),
                      partially_false: int = Field(..., description='Number of "partially false" responses'),
-                     definitely_false: int = Field(..., description='Number of "definitely false" responses')):
+                     definitely_false: int = Field(..., description='Number of "definitely false" responses'),
+                     mean: float | None = None,
+                     prior_params: Tuple[float, float, float, float, float] = (1.0, 1.0, 1.0, 1.0, 1.0),
+                     **kwargs):
             self.n = n
             self.definitely_true = definitely_true
             self.partially_true = partially_true
             self.uncertain = uncertain
             self.partially_false = partially_false
             self.definitely_false = definitely_false
+            self.mean = mean
+            self.prior_params = prior_params  # Parameters for the prior Dirichlet distribution
 
         def __repr__(self):
             return (f"BeliefCategorical.DistributionFormat(n={self.n}, definitely_true={self.definitely_true}, "
@@ -128,13 +138,57 @@ class BeliefCategorical:
 
         def to_dict(self):
             return {
+                "_type": "categorical",
                 "n": self.n,
                 "definitely_true": self.definitely_true,
                 "partially_true": self.partially_true,
                 "uncertain": self.uncertain,
                 "partially_false": self.partially_false,
-                "definitely_false": self.definitely_false
+                "definitely_false": self.definitely_false,
+                "mean": self.mean,
             }
+
+        def get_mean_belief(self, prior=None) -> float:
+            """
+            Get the mean of the prior/posterior belief distribution.
+
+            Args:
+                prior (BeliefCategorical.DistributionFormat): Prior distribution format object.
+
+            Returns:
+                float: The mean belief probability.
+            """
+            if self.mean is None:
+                # Compute the mean belief using the Dirichlet distribution
+                if prior is None:
+                    mean_per_category = {
+                        "definitely_true": (self.definitely_true + self.prior_params[0]) / (
+                                self.n + sum(self.prior_params)),
+                        "partially_true": (self.partially_true + self.prior_params[1]) / (
+                                self.n + sum(self.prior_params)),
+                        "uncertain": (self.uncertain + self.prior_params[2]) / (self.n + sum(self.prior_params)),
+                        "partially_false": (self.partially_false + self.prior_params[3]) / (
+                                self.n + sum(self.prior_params)),
+                        "definitely_false": (self.definitely_false + self.prior_params[4]) / (
+                                self.n + sum(self.prior_params))
+                    }
+                else:
+                    # Bayesian update
+                    mean_per_category = {
+                        "definitely_true": (self.definitely_true + prior.definitely_true + prior.prior_params[0]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "partially_true": (self.partially_true + prior.partially_true + prior.prior_params[1]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "uncertain": (self.uncertain + prior.uncertain + prior.prior_params[2]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "partially_false": (self.partially_false + prior.partially_false + prior.prior_params[3]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "definitely_false": (self.definitely_false + prior.definitely_false + prior.prior_params[4]) / (
+                                self.n + prior.n + sum(prior.prior_params))
+                    }
+                self.mean = sum(
+                    mean_per_category[cat] * BeliefCategorical.score_per_category[cat] for cat in mean_per_category)
+            return self.mean
 
     class ResponseFormat(BaseModel):
         belief: str = Field(..., description="Belief about the hypothesis",
@@ -142,12 +196,14 @@ class BeliefCategorical:
                                      "partially false", "definitely false"])
 
     @staticmethod
-    def parse_response(response: List[dict]) -> 'BeliefCategorical.DistributionFormat':
+    def parse_response(response: List[dict], prior_params: Tuple[float, float, float, float, float] = (
+            1.0, 1.0, 1.0, 1.0, 1.0)) -> 'BeliefCategorical.DistributionFormat':
         """
         Parse the response from the LLM into a DistributionFormat.
 
         Args:
             response (dict): The response from the LLM containing belief counts.
+            prior_params (Tuple[float, float, float, float, float]): Parameters for the prior Dirichlet distribution.
 
         Returns:
             BeliefCategorical.DistributionFormat: Parsed distribution format.
@@ -165,55 +221,9 @@ class BeliefCategorical:
             partially_true=partially_true,
             uncertain=uncertain,
             partially_false=partially_false,
-            definitely_false=definitely_false
+            definitely_false=definitely_false,
+            prior_params=prior_params
         )
-
-    @staticmethod
-    def get_mean_belief(obj: 'BeliefCategorical.DistributionFormat') -> float:
-        # Assuming a uniform prior for each category, we can compute the mean belief using the Dirichlet distribution
-        prior_param = 1.0
-        mean_per_category = {
-            "definitely_true": (obj.definitely_true + prior_param) / (obj.n + 5 * prior_param),
-            "partially_true": (obj.partially_true + prior_param) / (obj.n + 5 * prior_param),
-            "uncertain": (obj.uncertain + prior_param) / (obj.n + 5 * prior_param),
-            "partially_false": (obj.partially_false + prior_param) / (obj.n + 5 * prior_param),
-            "definitely_false": (obj.definitely_false + prior_param) / (obj.n + 5 * prior_param)
-        }
-        mean_belief = sum(
-            mean_per_category[cat] * BeliefCategorical.score_per_category[cat] for cat in mean_per_category)
-        return mean_belief
-
-    @staticmethod
-    def get_mean_posterior_belief(
-            obj: 'BeliefCategorical.DistributionFormat',
-            prior: 'BeliefCategorical.DistributionFormat'
-    ) -> float:
-        """
-        Get the mean posterior belief from the distribution format and prior.
-
-        Args:
-            obj (BeliefCategorical.DistributionFormat): The distribution format object.
-            prior (BeliefCategorical.DistributionFormat): The prior distribution format object.
-
-        Returns:
-            float: The mean posterior belief probability.
-        """
-        # Bayesian update: Dirichlet(n_true + a, n_false + b) where a and b are prior parameters
-        prior_param = 1.0
-        mean_per_category = {
-            "definitely_true": (obj.definitely_true + prior.definitely_true + prior_param) / (
-                    obj.n + prior.n + 5 * prior_param),
-            "partially_true": (obj.partially_true + prior.partially_true + prior_param) / (
-                    obj.n + prior.n + 5 * prior_param),
-            "uncertain": (obj.uncertain + prior.uncertain + prior_param) / (obj.n + prior.n + 5 * prior_param),
-            "partially_false": (obj.partially_false + prior.partially_false + prior_param) / (
-                    obj.n + prior.n + 5 * prior_param),
-            "definitely_false": (obj.definitely_false + prior.definitely_false + prior_param) / (
-                    obj.n + prior.n + 5 * prior_param)
-        }
-        mean_belief = sum(
-            mean_per_category[cat] * BeliefCategorical.score_per_category[cat] for cat in mean_per_category)
-        return mean_belief
 
 
 class BeliefCategoricalNumeric:
@@ -235,6 +245,8 @@ class BeliefCategoricalNumeric:
             bucket_46: Number of responses that fall in the range [0.4, 0.6)
             bucket_68: Number of responses that fall in the range [0.6, 0.8)
             bucket_810: Number of responses that fall in the range [0.8, 1.0)
+            mean: Mean belief probability (optional, computed if not provided)
+            prior_params: Parameters for the prior Dirichlet distribution (alpha1, alpha2, alpha3, alpha4, alpha5)
         """
 
         def __init__(self,
@@ -243,13 +255,18 @@ class BeliefCategoricalNumeric:
                      bucket_24: int = Field(..., description='Number of responses that fall in the range [0.2, 0.4)'),
                      bucket_46: int = Field(..., description='Number of responses that fall in the range [0.4, 0.6)'),
                      bucket_68: int = Field(..., description='Number of responses that fall in the range [0.6, 0.8)'),
-                     bucket_810: int = Field(..., description='Number of responses that fall in the range [0.8, 1.0)')):
+                     bucket_810: int = Field(..., description='Number of responses that fall in the range [0.8, 1.0)'),
+                     mean: float | None = None,
+                     prior_params: Tuple[float, float, float, float, float] = (1.0, 1.0, 1.0, 1.0, 1.0),
+                     **kwargs):
             self.n = n
             self.bucket_02 = bucket_02
             self.bucket_24 = bucket_24
             self.bucket_46 = bucket_46
             self.bucket_68 = bucket_68
             self.bucket_810 = bucket_810
+            self.mean = mean
+            self.prior_params = prior_params  # Parameters for the prior Dirichlet distribution
 
         def __repr__(self):
             return (f"BeliefCategoricalNumeric.DistributionFormat(n={self.n}, bucket_02={self.bucket_02}, "
@@ -258,25 +275,68 @@ class BeliefCategoricalNumeric:
 
         def to_dict(self):
             return {
+                "_type": "categorical_numeric",
                 "n": self.n,
                 "bucket_02": self.bucket_02,
                 "bucket_24": self.bucket_24,
                 "bucket_46": self.bucket_46,
                 "bucket_68": self.bucket_68,
-                "bucket_810": self.bucket_810
+                "bucket_810": self.bucket_810,
+                "mean": self.mean,
             }
+
+        def get_mean_belief(self, prior=None) -> float:
+            """
+            Get the mean of the prior/posterior belief distribution.
+
+            Args:
+                prior (BeliefCategoricalNumeric.DistributionFormat): Prior distribution format object.
+
+            Returns:
+                float: The mean belief probability.
+            """
+            if self.mean is None:
+                # Compute the mean belief using the Dirichlet distribution
+                if prior is None:
+                    mean_per_category = {
+                        "0-0.2": (self.bucket_02 + self.prior_params[0]) / (self.n + sum(self.prior_params)),
+                        "0.2-0.4": (self.bucket_24 + self.prior_params[1]) / (self.n + sum(self.prior_params)),
+                        "0.4-0.6": (self.bucket_46 + self.prior_params[2]) / (self.n + sum(self.prior_params)),
+                        "0.6-0.8": (self.bucket_68 + self.prior_params[3]) / (self.n + sum(self.prior_params)),
+                        "0.8-1.0": (self.bucket_810 + self.prior_params[4]) / (self.n + sum(self.prior_params))
+                    }
+                else:
+                    # Bayesian update
+                    mean_per_category = {
+                        "0-0.2": (self.bucket_02 + prior.bucket_02 + prior.prior_params[0]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "0.2-0.4": (self.bucket_24 + prior.bucket_24 + prior.prior_params[1]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "0.4-0.6": (self.bucket_46 + prior.bucket_46 + prior.prior_params[2]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "0.6-0.8": (self.bucket_68 + prior.bucket_68 + prior.prior_params[3]) / (
+                                self.n + prior.n + sum(prior.prior_params)),
+                        "0.8-1.0": (self.bucket_810 + prior.bucket_810 + prior.prior_params[4]) / (
+                                self.n + prior.n + sum(prior.prior_params))
+                    }
+                self.mean = sum(mean_per_category[cat] * BeliefCategoricalNumeric.score_per_category[cat] for cat in
+                                mean_per_category)
+
+            return self.mean
 
     class ResponseFormat(BaseModel):
         belief: str = Field(..., description="Belief about the hypothesis being true",
                             choices=["0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0"])
 
     @staticmethod
-    def parse_response(response: List[dict]) -> 'BeliefCategoricalNumeric.DistributionFormat':
+    def parse_response(response: List[dict], prior_params: Tuple[float, float, float, float, float] = (
+            1.0, 1.0, 1.0, 1.0, 1.0)) -> 'BeliefCategoricalNumeric.DistributionFormat':
         """
         Parse the response from the LLM into a DistributionFormat.
 
         Args:
             response (dict): The response from the LLM containing belief counts.
+            prior_params (Tuple[float, float, float, float, float]): Parameters for the prior Dirichlet distribution.
 
         Returns:
             BeliefCategoricalNumeric.DistributionFormat: Parsed distribution format.
@@ -294,51 +354,9 @@ class BeliefCategoricalNumeric:
             bucket_24=bucket_24,
             bucket_46=bucket_46,
             bucket_68=bucket_68,
-            bucket_810=bucket_810
+            bucket_810=bucket_810,
+            prior_params=prior_params
         )
-
-    @staticmethod
-    def get_mean_belief(obj: 'BeliefCategoricalNumeric.DistributionFormat') -> float:
-        # Assuming a uniform prior for each category, we can compute the mean belief using the Dirichlet distribution
-        prior_param = 1.0
-        mean_per_category = {
-            "0-0.2": (obj.bucket_02 + prior_param) / (obj.n + 5 * prior_param),
-            "0.2-0.4": (obj.bucket_24 + prior_param) / (obj.n + 5 * prior_param),
-            "0.4-0.6": (obj.bucket_46 + prior_param) / (obj.n + 5 * prior_param),
-            "0.6-0.8": (obj.bucket_68 + prior_param) / (obj.n + 5 * prior_param),
-            "0.8-1.0": (obj.bucket_810 + prior_param) / (obj.n + 5 * prior_param)
-        }
-        mean_belief = sum(
-            mean_per_category[cat] * BeliefCategoricalNumeric.score_per_category[cat] for cat in mean_per_category)
-        return mean_belief
-
-    @staticmethod
-    def get_mean_posterior_belief(
-            obj: 'BeliefCategoricalNumeric.DistributionFormat',
-            prior: 'BeliefCategoricalNumeric.DistributionFormat'
-    ) -> float:
-        """
-        Get the mean posterior belief from the distribution format and prior.
-
-        Args:
-            obj (BeliefCategoricalNumeric.DistributionFormat): The distribution format object.
-            prior (BeliefCategoricalNumeric.DistributionFormat): The prior distribution format object.
-
-        Returns:
-            float: The mean posterior belief probability.
-        """
-        # Bayesian update: Dirichlet(n_true + a, n_false + b) where a and b are prior parameters
-        prior_param = 1.0
-        mean_per_category = {
-            "0-0.2": (obj.bucket_02 + prior.bucket_02 + prior_param) / (obj.n + prior.n + 5 * prior_param),
-            "0.2-0.4": (obj.bucket_24 + prior.bucket_24 + prior_param) / (obj.n + prior.n + 5 * prior_param),
-            "0.4-0.6": (obj.bucket_46 + prior.bucket_46 + prior_param) / (obj.n + prior.n + 5 * prior_param),
-            "0.6-0.8": (obj.bucket_68 + prior.bucket_68 + prior_param) / (obj.n + prior.n + 5 * prior_param),
-            "0.8-1.0": (obj.bucket_810 + prior.bucket_810 + prior_param) / (obj.n + prior.n + 5 * prior_param)
-        }
-        mean_belief = sum(
-            mean_per_category[cat] * BeliefCategoricalNumeric.score_per_category[cat] for cat in mean_per_category)
-        return mean_belief
 
 
 class BeliefProb:
@@ -355,7 +373,8 @@ class BeliefProb:
         def __init__(self,
                      n: int = Field(..., description="Number of samples used to compute the distribution"),
                      mean: float = Field(..., description="Mean probability of the hypothesis being true"),
-                     stddev: float = Field(..., description="Standard deviation of the probabilities")):
+                     stddev: float = Field(..., description="Standard deviation of the probabilities"),
+                     **kwargs):
             self.n = n
             self.mean = mean
             self.stddev = stddev
@@ -365,10 +384,42 @@ class BeliefProb:
 
         def to_dict(self):
             return {
+                "_type": "probability",
                 "n": self.n,
                 "mean": self.mean,
                 "stddev": self.stddev
             }
+
+        def get_mean_belief(self, prior=None) -> float:
+            """
+            Get the mean of the prior/posterior belief distribution.
+
+            Args:
+                prior (BeliefProb.DistributionFormat): Prior distribution format object.
+
+            Returns:
+                float: The mean belief probability.
+            """
+            if prior is not None:
+                # Bayesian update: Estimate Beta parameters from the mean and stddev for the prior and posterior distributions
+                prior_mean = prior.mean
+                prior_var = prior.stddev ** 2
+                prior_alpha = prior_mean * (prior_mean * (1 - prior_mean) / prior_var - 1)
+                prior_beta = (1 - prior_mean) * (prior_mean * (1 - prior_mean) / prior_var - 1)
+                like_mean = self.mean
+                like_var = self.stddev ** 2
+                like_alpha = like_mean * (like_mean * (1 - like_mean) / like_var - 1)
+                like_beta = (1 - like_mean) * (like_mean * (1 - like_mean) / like_var - 1)
+                # Posterior parameters
+                post_alpha = prior_alpha + like_alpha - 1  # -1 because we are using the mean of the likelihood
+                post_beta = prior_beta + like_beta - 1  # -1 because we are using the mean of the likelihood
+                # Mean of the posterior Beta distribution
+                self.mean = post_alpha / (post_alpha + post_beta)
+                # Also compute the standard deviation of the posterior
+                self.stddev = (post_alpha * post_beta) / (
+                        (post_alpha + post_beta) ** 2 * (post_alpha + post_beta + 1)) ** 0.5
+
+            return self.mean
 
     class ResponseFormat(BaseModel):
         belief: float = Field(..., description="Mean probability of the hypothesis being true",
@@ -390,50 +441,6 @@ class BeliefProb:
         stddev = (sum((_res["belief"] - mean) ** 2 for _res in response) / n) ** 0.5
 
         return BeliefProb.DistributionFormat(n=n, mean=mean, stddev=stddev)
-
-    @staticmethod
-    def get_mean_belief(obj: 'BeliefProb.DistributionFormat') -> float:
-        """
-        Get the mean belief from the distribution format.
-
-        Args:
-            obj (BeliefProb.DistributionFormat): The distribution format object.
-
-        Returns:
-            float: The mean belief probability.
-        """
-        return obj.mean
-
-    @staticmethod
-    def get_mean_posterior_belief(
-            obj: 'BeliefProb.DistributionFormat',
-            prior: 'BeliefProb.DistributionFormat'
-    ) -> float:
-        """
-        Get the mean posterior belief from the distribution format and prior.
-
-        Args:
-            obj (BeliefProb.DistributionFormat): The distribution format object.
-            prior (BeliefProb.DistributionFormat): The prior distribution format object.
-
-        Returns:
-            float: The mean posterior belief probability.
-        """
-        # Bayesian update: Estimate Beta parameters from the mean and stddev for the prior and posterior distributions
-        prior_mean = prior.mean
-        prior_var = prior.stddev ** 2
-        prior_alpha = prior_mean * (prior_mean * (1 - prior_mean) / prior_var - 1)
-        prior_beta = (1 - prior_mean) * (prior_mean * (1 - prior_mean) / prior_var - 1)
-        like_mean = obj.mean
-        like_var = obj.stddev ** 2
-        like_alpha = like_mean * (like_mean * (1 - like_mean) / like_var - 1)
-        like_beta = (1 - like_mean) * (like_mean * (1 - like_mean) / like_var - 1)
-        # Posterior parameters
-        post_alpha = prior_alpha + like_alpha - 1  # -1 because we are using the mean of the likelihood
-        post_beta = prior_beta + like_beta - 1  # -1 because we are using the mean of the likelihood
-        # Mean of the posterior Beta distribution
-        posterior_mean = post_alpha / (post_alpha + post_beta)
-        return posterior_mean
 
 
 BELIEF_MODE_TO_CLS = {
@@ -518,9 +525,9 @@ def get_belief(
 
             # If we are using an explicit prior, we need to combine it with the posterior distribution
             if not use_prior and explicit_prior is not None:
-                mean_belief = belief_cls.get_mean_posterior_belief(distribution, explicit_prior)
+                mean_belief = distribution.get_mean_belief(prior=explicit_prior)
             else:
-                mean_belief = belief_cls.get_mean_belief(distribution)
+                mean_belief = distribution.get_mean_belief()
         except Exception as e:
             if attempt == n_retries - 1:
                 print(f"Querying LLM: ERROR: {e}\nMax retries reached. Returning empty distribution.")
@@ -538,7 +545,7 @@ def calculate_prior_and_posterior_beliefs(node, n_samples=4, model="gpt-4o", tem
     Calculate prior and posterior belief distributions for a hypothesis.
 
     Args:
-        node: MCTSNode instance containing node information and messages
+        node: MCTSNode instance containing node information and messages or a dictionary with node data
     """
 
     MODEL_CTXT_LIMITS = {
@@ -546,21 +553,29 @@ def calculate_prior_and_posterior_beliefs(node, n_samples=4, model="gpt-4o", tem
         "gpt-4o": 128_000,
     }
 
-    hypothesis = node.hypothesis["hypothesis"]
+    if type(node) is MCTSNode:
+        hypothesis = node.hypothesis
+        if type(hypothesis) is dict:
+            hypothesis = hypothesis["hypothesis"]
+        messages = node.messages or []
+    else:
+        hypothesis = node.get("hypothesis", None)
+        if type(hypothesis) is dict:
+            hypothesis = hypothesis["hypothesis"]
+        messages = node.get("messages", [])
 
     # Only include the latest experiment plan or experiment reviser, programmer, and analyst messages
-    messages = node.messages or []
     latest_experiment = None
     latest_programmer = None
     latest_code_executor = None
     latest_analyst = None
 
     for msg in reversed(messages):
-        if not latest_experiment and msg.get("name") in ("user_proxy", "experiment_reviser"):
+        if not latest_experiment and msg.get("name") in ["user_proxy", "experiment_reviser"]:
             latest_experiment = msg
         elif not latest_programmer and msg.get("name") == "experiment_programmer":
             latest_programmer = msg
-        elif not latest_analyst and msg.get("name") == "experiment_analyst":
+        elif not latest_analyst and msg.get("name") in ["experiment_analyst", "experiment_code_analyst"]:
             latest_analyst = msg
         elif not latest_code_executor and msg.get("name") == "code_executor":
             latest_code_executor = msg
@@ -605,5 +620,6 @@ def calculate_prior_and_posterior_beliefs(node, n_samples=4, model="gpt-4o", tem
 
     belief_change = abs(posterior_mean - prior_mean)
     is_surprisal = belief_change >= surprisal_width
+    # is_surprisal_in_diff_02buckets = (prior_mean*10)//2 != (posterior_mean*10)//2
 
     return is_surprisal, belief_change, prior, posterior
