@@ -1,3 +1,4 @@
+import copy
 import os
 from typing import Optional
 import random
@@ -37,7 +38,7 @@ class MCTSNode(object):
         # Agent attributes
         self.query = query
         self.messages = []
-        self.untried_experiments = untried_experiments.copy() if untried_experiments is not None else []
+        self.untried_experiments = copy.deepcopy(untried_experiments) if untried_experiments is not None else []
         self.tried_experiments = []  # Track all tried experiments
         self.allow_generate_experiments = allow_generate_experiments
 
@@ -59,6 +60,7 @@ class MCTSNode(object):
         self.prior = None
         self.posterior = None
         self.belief_change: Optional[float] = None  # Change in belief from prior to posterior
+        self.kl_divergence: Optional[float] = None
 
     def init_from_dict(self, data):
         """Initialize node attributes from a dictionary."""
@@ -111,6 +113,7 @@ class MCTSNode(object):
             belief_cls = BELIEF_MODE_TO_CLS[data['posterior']['_type']]
             self.posterior = belief_cls.DistributionFormat(**data['posterior'])
         self.belief_change = data.get('belief_change', self.belief_change)
+        self.kl_divergence = data.get('kl_divergence', self.kl_divergence)
 
     def get_next_experiment(self, experiment_generator=None, n_retry=3):
         """
@@ -166,6 +169,7 @@ class MCTSNode(object):
             "self_value": self.self_value,
             "surprising": self.surprising,
             "belief_change": self.belief_change,
+            "kl_divergence": self.kl_divergence,
             "prior": self.prior.to_dict() if self.prior else None,
             "posterior": self.posterior.to_dict() if self.posterior else None,
             "hypothesis": self.hypothesis,
@@ -271,7 +275,7 @@ class MCTSNode(object):
 
 
 def default_mcts_selection(exploration_weight):
-    def select(node):
+    def select(node, nodes_by_level):
         # Traverse the tree until we find a node with untried experiments
         while node.children and not node.has_untried_experiments():
             # Select the child with the highest UCB1 value
@@ -294,7 +298,7 @@ def progressive_widening(k, alpha, exploration_weight=1.0):
         A callable function that accepts a `node` and returns the selected node.
     """
 
-    def select(node):
+    def select(node, nodes_by_level):
         # Get the number of visits and children for the current node
         num_visits = node.visits
         num_children = len(node.children)
@@ -307,10 +311,68 @@ def progressive_widening(k, alpha, exploration_weight=1.0):
         # Otherwise, recursively sample from the children
         if node.children:
             # Select a child node recursively using the same selection function
-            return select(max(node.children, key=lambda n: ucb1(n, exploration_weight)))
+            return select(max(node.children, key=lambda n: ucb1(n, exploration_weight)), nodes_by_level)
 
         # If no children exist, return the current node
         return node
+
+    return select
+
+
+def progressive_widening_all(k, alpha, exploration_weight=1.0):
+    """
+    Create a progressive widening selection function with an alternative implementation that selects the node
+    which has the highest UCB1 value from the entire set of nodes.
+
+    Args:
+        k: Progressive widening constant.
+        alpha: Progressive widening exponent.
+        exploration_weight: Exploration weight for UCB1 selection method.
+
+    Returns:
+        A callable function that accepts a `node` and returns the selected node.
+    """
+
+    def select(node, nodes_by_level):
+        all_nodes = [n for level, nodes in nodes_by_level.items() if level > 0 for n in nodes]
+        # Sort all nodes by UCB1 value
+        all_nodes_sorted = sorted(all_nodes, key=lambda n: ucb1(n, exploration_weight), reverse=True)
+
+        for _node in all_nodes_sorted:
+            num_visits = _node.visits
+            num_children = len(_node.children)
+            # If we can add a new child based on the progressive widening condition
+            if (num_children < k * (num_visits ** alpha)) and _node.has_untried_experiments():
+                # Sample a new child (expand the tree)
+                return _node
+
+        # If no children exist, return the current node
+        return node
+
+    return select
+
+
+def ucb1_recursive(exploration_weight=1.0):
+    """
+    Create a UCB1 traversal selection function.
+
+    Args:
+        exploration_weight: Exploration weight for UCB1 selection method.
+
+    Returns:
+        A callable function that accepts a `node` and returns the selected node.
+    """
+
+    def select(node, nodes_by_level):
+        # Sort self and children by UCB1 value
+        all_nodes = [node] + node.children
+        sorted_nodes = sorted(all_nodes, key=lambda n: ucb1(n, exploration_weight), reverse=True)
+
+        for best_node in sorted_nodes:
+            if best_node.has_untried_experiments():
+                if best_node is node:
+                    return best_node
+                return select(best_node, nodes_by_level)
 
     return select
 
@@ -328,7 +390,7 @@ def beam_search(branching_factor, beam_width, log_dirname=None):
     """
     beam = []  # Current nodes in beam
 
-    def select(root):
+    def select(root, nodes_by_level):
         nonlocal beam
 
         # Initialize beam with root if empty
@@ -359,7 +421,7 @@ def beam_search(branching_factor, beam_width, log_dirname=None):
                 level = beam[0].level if beam else 0
                 with open(os.path.join(log_dirname, f"beam_level_{level}.json"), "w") as f:
                     json.dump(beam_state, f, indent=2)
-            return select(root)  # Recurse with new beam
+            return select(root, nodes_by_level)  # Recurse with new beam
 
         return beam[0]  # Default to first beam node if no children
 
@@ -370,4 +432,8 @@ def ucb1(node, exploration_weight=1.0):
     """Upper Confidence Bound 1 calculation for node selection"""
     if node.visits == 0:
         return float('inf')
-    return (node.value / node.visits) + exploration_weight * np.sqrt(2 * np.log(node.parent.visits) / node.visits)
+    exploitation_term = node.value / node.visits
+    exploration_term = 0
+    if node.parent:
+        exploration_term = np.sqrt(2 * np.log(node.parent.visits) / node.visits)
+    return exploitation_term + exploration_weight * exploration_term

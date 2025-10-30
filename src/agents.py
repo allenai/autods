@@ -150,14 +150,14 @@ def get_agents(work_dir, model_name="o4-mini", temperature=None, reasoning_effor
         system_message=(
             'You are a research scientist who is interested in doing open-ended, data-driven research using the provided dataset(s). '
             f'{_user_query_or_empty}'
-            'Be creative and think of an interesting new hypothesis and an experiment to verify it. '
-            'The hypothesis should be a falsifiable statement that can be sufficiently tested by the proposed experiment. '
-            'Along with the hypothesis, explain in natural language the experiment plan that the programmer should follow (do not provide the code yourself). '
-            'Remember, you are interested in open-ended research, so do not hesitate to propose hypotheses that lack a direct connection to the previously explored hypotheses. '
-            'Here are a few instructions that you must follow:\n'
+            f'Be creative and think of new and interesting verifiable {"experiments" if experiment_first else "hypotheses"} and corresponding {"hypotheses" if experiment_first else "experiments"}. '
+            'The hypothesis should be a falsifiable statement that can be sufficiently tested by an experiment using the provided data. '
+            'Explain in natural language what this experiment plan is so that a programmer can implement it (do not provide the code yourself). '
+            'Remember, you are interested in open-ended research, so your proposals may be exploratory in nature and may have only an indirect connection to the previous explorations provided. '
+            'Here are some instructions that you must follow:\n'
             '1. Strictly use only the dataset(s) provided and do not simulate dummy/synthetic data or columns that cannot be derived from the existing columns.\n'
             '2. Each hypothesis (and experiment plan) should be creative, independent, and self-contained.\n'
-            '3. Use the prior experiments as inspiration to think of an interesting and creative new experiment. However, do not repeat the same experiments.\n\n'
+            '3. Use the prior experiments/hypotheses as inspiration to think of interesting and creative new experiments/hypotheses. However, do not repeat the same experiments/hypotheses.\n\n'
             'Here is a possible approach to coming up with a new hypothesis and experiment plan:\n'
             '1. Find an interesting context: this could be a specific subset of the data. E.g., if the dataset has multiple categorical variables, you could split the data based on specific values of such variables, which would then allow you to validate a hypothesis in the specific contexts defined by the values of those variables.\n'
             '2. Find interesting variables: these could be the columns in the dataset that you find interesting or relevant to the context. You are allowed and encouraged to create composite variables derived from the existing variables.\n'
@@ -165,7 +165,7 @@ def get_agents(work_dir, model_name="o4-mini", temperature=None, reasoning_effor
             '4. You must require that your proposed hypotheses are verifiable using robust statistical tests. Remember, your programmer can install python packages via pip which can allow it to write code for complex statistical analyses.\n'
             '5. Multiple datasets: If you are provided with more than one dataset, then try to also propose hypotheses that utilize contexts, variables, and relationships across datasets, e.g., this may involve using join or similar operations.\n\n'
             'Generally, in typical data-driven research, you will need to explore and visualize the data for possible high-level insights, clean, transform, or derive new variables from the dataset to be suited for the investigation, deep-dive into specific parts of the data for fine-grained analysis, perform data modeling, and run statistical tests. '
-            f'Now, generate exactly {branching_factor} new hypotheses (and experiment plans).'
+            f'Now, generate exactly {branching_factor} new hypotheses with their experiment plans.'
         ),
         human_input_mode="NEVER",
     )
@@ -255,8 +255,9 @@ def install(package):
     executor = LocalCommandLineCodeExecutor(
         timeout=code_timeout,  # Timeout in seconds
         work_dir=work_dir,
-        # virtual_env_context=create_virtual_env(os.path.join(work_dir, ".venv"))
+        # virtual_env_context=create_virtual_env(os.path.join(work_dir, ".venv"))  # TODO: Fix virtual env creation
     )
+    # TODO: Fix docker-based execution
     # executor = DockerCommandLineCodeExecutor(
     #     # image="python:3.11-alpine",
     #     timeout=30 * 60,  # Timeout in seconds
@@ -271,7 +272,7 @@ def install(package):
         code_execution_config={"executor": executor},
         human_input_mode="NEVER",
     )
-
+    # Apply image analysis patch to the code executor
     transform_messages_capability = transform_messages.TransformMessages(transforms=[CodeBlockWrapperTransform()])
     transform_messages_capability.add_to_agent(code_executor)
 
@@ -283,7 +284,7 @@ def install(package):
     )
 
     agents = [experiment_generator, experiment_programmer, experiment_analyst, experiment_reviewer, experiment_reviser,
-              code_executor, user_proxy]  # image_analyst
+              code_executor, user_proxy]
 
     # Apply token limit to all agents
     for agent in agents:

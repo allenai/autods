@@ -2,7 +2,7 @@ import json
 import os
 import regex as re
 from collections import defaultdict
-from typing import List, Dict
+from typing import List, Dict, Literal
 from glob import glob
 
 from autogen import GroupChat, GroupChatManager
@@ -12,7 +12,7 @@ from src.nodes_to_csv import nodes_to_csv
 from src.transitions import SpeakerSelector
 
 
-def load_mcts_from_json(json_obj_or_file_or_dir, args, replay_mcts=True):
+def load_mcts_from_json(json_obj_or_file_or_dir, args=None, replay_mcts=True):
     """Load and reconstruct MCTS nodes from a JSON object, log file, or directory.
 
     Args:
@@ -34,7 +34,7 @@ def load_mcts_from_json(json_obj_or_file_or_dir, args, replay_mcts=True):
     node_data.sort(key=lambda x: (int(x['id'].split('_')[1]), int(x['id'].split('_')[2])))
     for data in node_data:
         # Create an empty node and initialize from dict (parent links added in second pass)
-        node = MCTSNode(allow_generate_experiments=args.allow_generate_experiments)
+        node = MCTSNode(allow_generate_experiments=args.allow_generate_experiments if args else True)
         node.init_from_dict(data)
         # Add to data structures
         nodes_by_level[node.level].append(node)
@@ -214,6 +214,9 @@ def get_nodes(in_fpath_or_json: str | List[Dict[str, any]]) -> List[Dict[str, an
 
 
 def print_node_info(node):
+    prior_mean = node.prior.get_mean_belief()
+    posterior_mean = node.posterior.get_mean_belief(prior=node.prior)
+    direction = "+" if posterior_mean > prior_mean else ("-" if posterior_mean < prior_mean else "=")
     print(f"""\n\n\
 ================================================================================
 
@@ -221,10 +224,12 @@ NODE_LEVEL={node.level}, NODE_IDX={node.node_idx}:
 -------------------------
 
 Hypothesis: {node.hypothesis}
-Prior: {node.prior.get_mean_belief()}
-Posterior: {node.posterior.get_mean_belief(prior=node.prior)}
-Belief Change: {node.belief_change}
+Prior: {prior_mean:.4f}
+Posterior: {posterior_mean:.4f}
 Surprisal: {node.surprising}
+Belief Change: {node.belief_change:.4f} ({direction})
+KL Divergence: {node.kl_divergence:.4f}
+Reward: {node.self_value:.4f}
 
 ================================================================================\n\n""")
 
@@ -284,14 +289,59 @@ def get_node_level_idx(node_or_id):
     return map(int, id.split("_")[1:])
 
 
-def get_context_string(hyp_exp_query, code_output, analysis, review, include_code_output=True):
+def get_context_string(hyp_exp_query, code_output=None, analysis=None, review=None,
+                       belief_mean=None, include_code_output=False):
     # Format the experiment to include as context in, e.g., an LLM call.
-    context_str = hyp_exp_query + "\n\n"
-    if include_code_output:
-        context_str += f"Code Output:\n{code_output}\n\n"
-    context_str += f"""\
-Analysis: {analysis}
-
-Review: {review}"""
+    context_str = hyp_exp_query
+    if include_code_output and code_output is not None:
+        context_str += f"\n\nCode Output:\n{code_output}"
+    if analysis is not None:
+        context_str += f"\n\nAnalysis:\n{analysis}"
+    if review is not None:
+        context_str += f"\n\nReview:\n{review}"
+    if belief_mean is not None:
+        context_str += f"\n\nBelief about this hypothesis (range 0-1: definitely false -> uncertain -> definitely true): {belief_mean:.4f}"
 
     return context_str
+
+
+def get_self_value(belief_change, kl_divergence, binary=True, width=0.2, kl_scale=20.0,
+                   mode: Literal["belief", "kl", "belief_and_kl"] = "belief_and_kl"):
+    """Get self value for a node based on its belief.
+
+    Args:
+        belief_change (float): Change in belief from prior to posterior.
+        kl_divergence (float): KL divergence between prior and posterior beliefs.
+        binary (bool): Whether the surprisal reward is binary or continuous.
+        width (float): Surprisal width for belief change.
+        kl_scale (float): Normalization factor for KL divergence.
+        mode (str): Mode to use for self value calculation. Choices: "belief", "kl", "both".
+
+    Returns:
+        float: Self value based on the belief type.
+        bool: Whether it is a surprisal.
+    """
+    if mode == "belief":
+        if binary:
+            return float(belief_change >= width), bool(belief_change >= width)
+        else:
+            # Continuous reward normalized by the surprisal width
+            return belief_change / width, bool((belief_change / width) >= 1.0)
+    elif mode == "kl":
+        # KL divergence reward normalized by the KL scale
+        if binary:
+            return float(kl_divergence >= kl_scale), bool(kl_divergence >= kl_scale)
+        else:
+            return kl_divergence / kl_scale, bool((kl_divergence / kl_scale) >= 1.0)
+    elif mode == "belief_and_kl":
+        # Satisfy both modes
+        belief_value, is_surprising_belief = get_self_value(belief_change, kl_divergence, binary, width, kl_scale,
+                                                            mode="belief")
+        kl_value, is_surprising_kl = get_self_value(belief_change, kl_divergence, binary, width, kl_scale,
+                                                    mode="kl")
+        # Combine both values
+        combined_value = max(belief_value, kl_value)
+        is_surprising = bool(is_surprising_belief or is_surprising_kl)
+        return combined_value, is_surprising
+
+    raise ValueError(f"Invalid mode: {mode}. Choose from 'belief', 'kl', or 'belief_and_kl'.")

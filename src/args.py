@@ -3,7 +3,7 @@ import argparse
 
 class ArgParser(argparse.ArgumentParser):
     def __init__(self, group=None):
-        super().__init__(description='Run AutoDV exploration')
+        super().__init__(description='Run AutoDS exploration')
 
         self.add_argument('--dataset_metadata', type=str, required=True, help='Path to dataset metadata.')
         self.add_argument('--out_dir', type=str, required=True, help='Output directory for logs.')
@@ -32,7 +32,7 @@ class ArgParser(argparse.ArgumentParser):
         self.add_argument('--timestamp_dir', action=argparse.BooleanOptionalAction, default=True,
                           help='Create timestamped directory for logs')
         self.add_argument('--exploration_weight', type=float, help='Exploration weight for UCB1 selection method',
-                          default=1.0)
+                          default=2.0)
         self.add_argument('--dataset_metadata_type', type=str, choices=['dbench', 'blade'], default='dbench',
                           help='Type of dataset metadata format (dbench, blade, or ai2)')
         self.add_argument('--work_dir', type=str, required=True, help='Working directory for agents')
@@ -41,9 +41,9 @@ class ArgParser(argparse.ArgumentParser):
         self.add_argument('--beam_width', type=int, default=8, help='Beam width for beam search selection method')
         self.add_argument('--use_beam_search', action=argparse.BooleanOptionalAction, default=False,
                           help='Use beam search selection method')
-        self.add_argument("--mcts_selection", type=str, choices=['ucb1', 'beam_search', 'pw'],
-                          default='pw',
-                          help="Selection method to use in MCTS (UCB1, beam search, or progressive widening)")
+        self.add_argument("--mcts_selection", type=str,
+                          choices=['ucb1', 'beam_search', 'pw', 'pw_all', 'ucb1_recursive'], default='ucb1_recursive',
+                          help="Selection method to use in MCTS (UCB1, beam search, progressive widening, progressive widening with all nodes)")
         self.add_argument('--pw_k', type=float, help='Progressive widening constant k', default=1.0)
         self.add_argument('--pw_alpha', type=float, help='Progressive widening exponent alpha', default=0.5)
         self.add_argument('--k_parents', type=int, default=3,
@@ -53,10 +53,9 @@ class ArgParser(argparse.ArgumentParser):
         self.add_argument('--surprisal_width', type=float, default=0.2,
                           help='Minimum difference in mean prior and posterior probabilities required to count as a surprisal.')
         self.add_argument('--belief_mode', type=str,
-                          choices=['boolean', 'categorical', 'categorical_numeric', 'probability'],
-                          default='categorical',
-                          help='Belief elicitation mode')
-        self.add_argument('--use_binary_reward', action=argparse.BooleanOptionalAction, default=True,
+                          choices=['boolean', 'boolean_cat', 'categorical', 'categorical_numeric', 'gaussian'],
+                          default='boolean_cat', help='Belief elicitation mode')
+        self.add_argument('--use_binary_reward', action=argparse.BooleanOptionalAction, default=False,
                           help='Use binary reward for MCTS instead of a continuous reward (belief change)')
         self.add_argument('--dedupe', action=argparse.BooleanOptionalAction, default=True,
                           help='Run deduplication after MCTS')
@@ -68,3 +67,15 @@ class ArgParser(argparse.ArgumentParser):
                           help='Timeout for code execution in seconds')
         self.add_argument('--run_eda', action=argparse.BooleanOptionalAction, default=False,
                           help='Run EDA as part of the initial experiment')
+        self.add_argument('--n_warmstart', type=int, default=8,
+                          help='Number of initial experiments to run after data loading before using MCTS')
+        self.add_argument('--use_online_beliefs', action=argparse.BooleanOptionalAction, default=False,
+                          help='Use online beliefs conditioned on past surprisals')
+        self.add_argument('--evidence_weight', type=float, default=2.0,
+                          help='Weight for the experimental evidence when computing posterior beliefs')
+        self.add_argument('--kl_scale', type=float, default=5.0,
+                          help='Normalization factor for KL divergence in the reward function')
+        self.add_argument('--reward_mode', type=str, choices=['belief', 'kl', 'belief_and_kl'],
+                          default='kl', help='Reward mode for MCTS (belief change, KL divergence or both)')
+        self.add_argument('--warmstart_experiments', type=str,
+                          help='Path to JSON file containing a list of warmstart experiments to run before MCTS')

@@ -12,3 +12,4 @@ dependencies:
     - scipy
     - statsmodels
     - h5py
+    - boto3
