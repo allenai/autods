@@ -9,12 +9,19 @@ Create the environment with:
 
 ```sh
 conda env create -f environment.yml
+conda activate autods
 ```
 
 Set environment variables:
 
 ```sh
+# (for Linux/MacOS/Bash/Cygwin)
 export PYTHONPATH=$(pwd):$PYTHONPATH;
+
+# (for Windows CMD)
+set PYTHONPATH=%cd%;%PYTHONPATH%
+
+# (if OPENAI_API_KEY is not already set)
 export OPENAI_API_KEY=<key>
 ```
 
